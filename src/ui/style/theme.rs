@@ -32,7 +32,7 @@ fn is_light() -> bool {
 // --- Dynamic colors based on theme ---
 
 pub fn color_primary() -> Color {
-    Color::Rgb(0xC4, 0x72, 0x00)
+    Color::Rgb(0x0D, 0x94, 0x88)
 }
 pub fn color_secondary() -> Color {
     if is_light() {
