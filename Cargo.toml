@@ -1,0 +1,27 @@
+[package]
+name = "lazy-transfer"
+version = "0.1.0"
+edition = "2021"
+description = "A TUI dual-pane file manager for SSH/SCP remote transfers"
+license = "MIT"
+readme = "README.md"
+keywords = ["ssh", "scp", "tui", "terminal", "file-transfer"]
+categories = ["command-line-utilities"]
+
+[dependencies]
+ratatui = "0.29"
+crossterm = "0.28"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+regex = "1"
+log = "0.4"
+dirs = "6"
+which = "7"
+clap = { version = "4", features = ["derive"] }
+thiserror = "2"
+fuzzy-matcher = "0.3"
+chrono = "0.4"
+
+[dev-dependencies]
+tempfile = "3"
+serial_test = "3"
