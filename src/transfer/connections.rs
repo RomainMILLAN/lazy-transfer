@@ -48,7 +48,11 @@ impl SavedConnection {
         }
     }
 
-    pub fn from_connection_config(name: &str, config: &ConnectionConfig, password: Option<&str>) -> Self {
+    pub fn from_connection_config(
+        name: &str,
+        config: &ConnectionConfig,
+        password: Option<&str>,
+    ) -> Self {
         let protocol = match config.protocol {
             Protocol::Ssh => "ssh",
             Protocol::Sftp => "sftp",

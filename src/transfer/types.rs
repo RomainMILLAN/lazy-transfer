@@ -1,15 +1,10 @@
 /// Protocol type for remote connections.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum Protocol {
+    #[default]
     Ssh,
     Sftp,
     Ftp,
-}
-
-impl Default for Protocol {
-    fn default() -> Self {
-        Protocol::Ssh
-    }
 }
 
 impl Protocol {

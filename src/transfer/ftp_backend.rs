@@ -21,12 +21,7 @@ unsafe impl Send for FtpBackend {}
 unsafe impl Sync for FtpBackend {}
 
 impl FtpBackend {
-    pub fn connect(
-        host: &str,
-        port: u16,
-        user: &str,
-        password: &str,
-    ) -> Result<Self, String> {
+    pub fn connect(host: &str, port: u16, user: &str, password: &str) -> Result<Self, String> {
         let addr = format!("{}:{}", host, port);
         let mut ftp =
             FtpStream::connect(&addr).map_err(|e| format!("FTP connect failed: {}", e))?;
@@ -71,7 +66,8 @@ impl RemoteBackend for FtpBackend {
 
     fn mkdir(&self, path: &str) -> Result<(), String> {
         let mut ftp = self.ftp.lock().map_err(|e| e.to_string())?;
-        ftp.mkdir(path).map_err(|e| format!("FTP mkdir failed: {}", e))?;
+        ftp.mkdir(path)
+            .map_err(|e| format!("FTP mkdir failed: {}", e))?;
         Ok(())
     }
 
@@ -108,8 +104,8 @@ impl RemoteBackend for FtpBackend {
         let local_path = local_path.to_string();
         let remote_path = remote_path.to_string();
 
-        let local_file = std::fs::File::open(&local_path)
-            .map_err(|e| format!("open local: {}", e))?;
+        let local_file =
+            std::fs::File::open(&local_path).map_err(|e| format!("open local: {}", e))?;
         let total_size = local_file.metadata().map(|m| m.len()).unwrap_or(0);
 
         let ftp_ptr = &self.ftp as *const Mutex<FtpStream> as usize;
@@ -127,15 +123,26 @@ impl RemoteBackend for FtpBackend {
 
             match result {
                 Ok(()) => {
-                    let _ = tx.send(StreamLine { text: String::new(), err: None, done: true });
+                    let _ = tx.send(StreamLine {
+                        text: String::new(),
+                        err: None,
+                        done: true,
+                    });
                 }
                 Err(e) => {
-                    let _ = tx.send(StreamLine { text: String::new(), err: Some(e), done: true });
+                    let _ = tx.send(StreamLine {
+                        text: String::new(),
+                        err: Some(e),
+                        done: true,
+                    });
                 }
             }
         });
 
-        Ok(StreamHandle { rx, child_pid: None })
+        Ok(StreamHandle {
+            rx,
+            child_pid: None,
+        })
     }
 
     fn download(&self, remote_path: &str, local_path: &str) -> Result<StreamHandle, String> {
@@ -167,14 +174,20 @@ impl RemoteBackend for FtpBackend {
                 let mut last_pct: u8 = 0;
 
                 for chunk in data.chunks(chunk_size) {
-                    local_file.write_all(chunk).map_err(|e| format!("write: {}", e))?;
+                    local_file
+                        .write_all(chunk)
+                        .map_err(|e| format!("write: {}", e))?;
                     written += chunk.len() as u64;
                     let report_total = if size > 0 { size as u64 } else { total };
                     if report_total > 0 {
                         let pct = (written * 100 / report_total) as u8;
                         if pct > last_pct {
                             last_pct = pct;
-                            let _ = tx.send(StreamLine { text: format!("{}%", pct), err: None, done: false });
+                            let _ = tx.send(StreamLine {
+                                text: format!("{}%", pct),
+                                err: None,
+                                done: false,
+                            });
                         }
                     }
                 }
@@ -183,12 +196,27 @@ impl RemoteBackend for FtpBackend {
             })();
 
             match result {
-                Ok(()) => { let _ = tx.send(StreamLine { text: String::new(), err: None, done: true }); }
-                Err(e) => { let _ = tx.send(StreamLine { text: String::new(), err: Some(e), done: true }); }
+                Ok(()) => {
+                    let _ = tx.send(StreamLine {
+                        text: String::new(),
+                        err: None,
+                        done: true,
+                    });
+                }
+                Err(e) => {
+                    let _ = tx.send(StreamLine {
+                        text: String::new(),
+                        err: Some(e),
+                        done: true,
+                    });
+                }
             }
         });
 
-        Ok(StreamHandle { rx, child_pid: None })
+        Ok(StreamHandle {
+            rx,
+            child_pid: None,
+        })
     }
 
     fn upload_dir(&self, local_path: &str, remote_dest: &str) -> Result<StreamHandle, String> {
@@ -209,7 +237,11 @@ impl RemoteBackend for FtpBackend {
                 let mut ftp = ftp_mutex.lock().map_err(|e| e.to_string())?;
 
                 let base = std::path::Path::new(&local_path);
-                let base_name = base.file_name().unwrap_or_default().to_string_lossy().to_string();
+                let base_name = base
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .to_string();
 
                 for (i, file_path) in files.iter().enumerate() {
                     let rel = file_path.strip_prefix(base).unwrap_or(file_path);
@@ -226,7 +258,7 @@ impl RemoteBackend for FtpBackend {
                     } else {
                         // Ensure parent dirs exist
                         if let Some(parent) = std::path::Path::new(&remote).parent() {
-                            let _ = ftp.mkdir(&parent.to_string_lossy());
+                            let _ = ftp.mkdir(parent.to_string_lossy());
                         }
                         let mut f = std::fs::File::open(file_path)
                             .map_err(|e| format!("open {}: {}", file_path.display(), e))?;
@@ -236,7 +268,11 @@ impl RemoteBackend for FtpBackend {
 
                     if total > 0 {
                         let pct = ((i + 1) * 100 / total) as u8;
-                        let _ = tx.send(StreamLine { text: format!("{}%", pct), err: None, done: false });
+                        let _ = tx.send(StreamLine {
+                            text: format!("{}%", pct),
+                            err: None,
+                            done: false,
+                        });
                     }
                 }
 
@@ -244,12 +280,27 @@ impl RemoteBackend for FtpBackend {
             })();
 
             match result {
-                Ok(()) => { let _ = tx.send(StreamLine { text: String::new(), err: None, done: true }); }
-                Err(e) => { let _ = tx.send(StreamLine { text: String::new(), err: Some(e), done: true }); }
+                Ok(()) => {
+                    let _ = tx.send(StreamLine {
+                        text: String::new(),
+                        err: None,
+                        done: true,
+                    });
+                }
+                Err(e) => {
+                    let _ = tx.send(StreamLine {
+                        text: String::new(),
+                        err: Some(e),
+                        done: true,
+                    });
+                }
             }
         });
 
-        Ok(StreamHandle { rx, child_pid: None })
+        Ok(StreamHandle {
+            rx,
+            child_pid: None,
+        })
     }
 
     fn download_dir(&self, remote_path: &str, local_dest: &str) -> Result<StreamHandle, String> {
@@ -267,12 +318,27 @@ impl RemoteBackend for FtpBackend {
             })();
 
             match result {
-                Ok(()) => { let _ = tx.send(StreamLine { text: String::new(), err: None, done: true }); }
-                Err(e) => { let _ = tx.send(StreamLine { text: String::new(), err: Some(e), done: true }); }
+                Ok(()) => {
+                    let _ = tx.send(StreamLine {
+                        text: String::new(),
+                        err: None,
+                        done: true,
+                    });
+                }
+                Err(e) => {
+                    let _ = tx.send(StreamLine {
+                        text: String::new(),
+                        err: Some(e),
+                        done: true,
+                    });
+                }
             }
         });
 
-        Ok(StreamHandle { rx, child_pid: None })
+        Ok(StreamHandle {
+            rx,
+            child_pid: None,
+        })
     }
 }
 
@@ -336,7 +402,8 @@ fn delete_dir_recursive(ftp: &mut FtpStream, path: &str) -> Result<(), String> {
         }
     }
 
-    ftp.rmdir(path).map_err(|e| format!("rmdir {}: {}", path, e))?;
+    ftp.rmdir(path)
+        .map_err(|e| format!("rmdir {}: {}", path, e))?;
     Ok(())
 }
 

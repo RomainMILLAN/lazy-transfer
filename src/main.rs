@@ -85,7 +85,8 @@ fn main() {
     };
     let port = cli.port.unwrap_or_else(|| protocol.default_port());
 
-    let mut app = lazy_transfer::ui::app::App::new(cfg, cli.host, cli.user, port, cli.identity, protocol);
+    let mut app =
+        lazy_transfer::ui::app::App::new(cfg, cli.host, cli.user, port, cli.identity, protocol);
 
     if let Err(e) = app.run() {
         log::error!("program error: {e}");

@@ -22,7 +22,10 @@ impl SshRunner {
 
 impl RemoteBackend for SshRunner {
     fn list_dir(&self, path: &str) -> Result<Vec<FileEntry>, String> {
-        let cmd = format!("ls -la --time-style=long-iso {} 2>/dev/null || ls -la {}", path, path);
+        let cmd = format!(
+            "ls -la --time-style=long-iso {} 2>/dev/null || ls -la {}",
+            path, path
+        );
         let result = self.exec.ssh_run(&cmd)?;
 
         if result.exit_code != 0 {
@@ -108,7 +111,12 @@ impl RemoteBackend for SshRunner {
         let remote_tar = format!("/tmp/{}", tmp_name);
 
         // Step 1: tar locally
-        log::info!("upload_dir: tar czf {} -C {} {}", local_tar, parent_dir, dir_name);
+        log::info!(
+            "upload_dir: tar czf {} -C {} {}",
+            local_tar,
+            parent_dir,
+            dir_name
+        );
         let tar_result = std::process::Command::new("tar")
             .args(["czf", &local_tar, "-C", &parent_dir, &dir_name])
             .output()
@@ -143,7 +151,8 @@ impl RemoteBackend for SshRunner {
                     if err.is_some() {
                         // Cleanup on error
                         let _ = std::fs::remove_file(&local_tar_cleanup);
-                        let _ = exec.ssh_run(&format!("rm -f '{}'", remote_tar.replace('\'', "'\\''")));
+                        let _ =
+                            exec.ssh_run(&format!("rm -f '{}'", remote_tar.replace('\'', "'\\''")));
                         return;
                     }
                     break;
@@ -202,7 +211,12 @@ impl RemoteBackend for SshRunner {
         let local_tar = format!("/tmp/{}", tmp_name);
 
         // Step 1: tar remotely
-        log::info!("download_dir: remote tar czf {} -C {} {}", remote_tar, parent_dir, dir_name);
+        log::info!(
+            "download_dir: remote tar czf {} -C {} {}",
+            remote_tar,
+            parent_dir,
+            dir_name
+        );
         let tar_cmd = format!(
             "tar czf '{}' -C '{}' '{}'",
             remote_tar.replace('\'', "'\\''"),
@@ -233,7 +247,10 @@ impl RemoteBackend for SshRunner {
                 if done {
                     if err.is_some() {
                         let _ = std::fs::remove_file(&local_tar_cleanup);
-                        let _ = exec.ssh_run(&format!("rm -f '{}'", remote_tar_cleanup.replace('\'', "'\\''")));
+                        let _ = exec.ssh_run(&format!(
+                            "rm -f '{}'",
+                            remote_tar_cleanup.replace('\'', "'\\''")
+                        ));
                         return;
                     }
                     break;
@@ -241,7 +258,11 @@ impl RemoteBackend for SshRunner {
             }
 
             // Step 3: extract locally
-            log::info!("download_dir: extracting {} to {}", local_tar_cleanup, local_dest);
+            log::info!(
+                "download_dir: extracting {} to {}",
+                local_tar_cleanup,
+                local_dest
+            );
             let extract = std::process::Command::new("tar")
                 .args(["xzf", &local_tar_cleanup, "-C", &local_dest])
                 .output();
@@ -257,7 +278,10 @@ impl RemoteBackend for SshRunner {
                         done: true,
                     });
                     let _ = std::fs::remove_file(&local_tar_cleanup);
-                    let _ = exec.ssh_run(&format!("rm -f '{}'", remote_tar_cleanup.replace('\'', "'\\''")));
+                    let _ = exec.ssh_run(&format!(
+                        "rm -f '{}'",
+                        remote_tar_cleanup.replace('\'', "'\\''")
+                    ));
                     return;
                 }
                 Err(e) => {
@@ -267,7 +291,10 @@ impl RemoteBackend for SshRunner {
                         done: true,
                     });
                     let _ = std::fs::remove_file(&local_tar_cleanup);
-                    let _ = exec.ssh_run(&format!("rm -f '{}'", remote_tar_cleanup.replace('\'', "'\\''")));
+                    let _ = exec.ssh_run(&format!(
+                        "rm -f '{}'",
+                        remote_tar_cleanup.replace('\'', "'\\''")
+                    ));
                     return;
                 }
             }
@@ -276,7 +303,10 @@ impl RemoteBackend for SshRunner {
             let _ = std::fs::remove_file(&local_tar_cleanup);
 
             // Step 5: cleanup remote tar
-            let _ = exec.ssh_run(&format!("rm -f '{}'", remote_tar_cleanup.replace('\'', "'\\''")));
+            let _ = exec.ssh_run(&format!(
+                "rm -f '{}'",
+                remote_tar_cleanup.replace('\'', "'\\''")
+            ));
 
             let _ = tx.send(crate::transfer::exec::StreamLine {
                 text: String::new(),
@@ -309,4 +339,3 @@ fn check_exit(result: &crate::transfer::exec::RunResult) -> Result<(), String> {
         Ok(())
     }
 }
-

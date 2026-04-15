@@ -273,5 +273,4 @@ mod tests {
         assert_eq!(shell_escape("hello world"), "'hello world'");
         assert_eq!(shell_escape("it's"), "'it'\\''s'");
     }
-
 }

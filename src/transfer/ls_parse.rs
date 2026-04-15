@@ -107,8 +107,7 @@ mod tests {
 
     #[test]
     fn parse_ls_filename_with_spaces() {
-        let output =
-            "total 4\n-rw-r--r-- 1 user group 100 2024-01-15 10:30 my file name.txt\n";
+        let output = "total 4\n-rw-r--r-- 1 user group 100 2024-01-15 10:30 my file name.txt\n";
         let entries = parse_ls_output(output);
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].name, "my file name.txt");

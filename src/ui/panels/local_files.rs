@@ -66,7 +66,7 @@ impl LocalFilesPanel {
             for entry in entries.flatten() {
                 let name = entry.file_name().to_string_lossy().to_string();
                 let metadata = entry.metadata().ok();
-                let is_dir = metadata.as_ref().map_or(false, |m| m.is_dir());
+                let is_dir = metadata.as_ref().is_some_and(|m| m.is_dir());
                 let size = metadata.as_ref().map_or(0, |m| m.len());
                 let modified = metadata
                     .as_ref()
@@ -99,7 +99,11 @@ impl LocalFilesPanel {
         self.rebuild_filter();
         // Restore cursor position, clamped to new list size
         let count = self.filtered.len();
-        self.cursor = if count == 0 { 0 } else { prev_cursor.min(count - 1) };
+        self.cursor = if count == 0 {
+            0
+        } else {
+            prev_cursor.min(count - 1)
+        };
     }
 
     pub fn set_filter(&mut self, filter: &str) {
@@ -174,11 +178,19 @@ impl LocalFilesPanel {
             let fa = &files[a];
             let fb = &files[b];
             // ".." always first
-            if fa.name == ".." { return std::cmp::Ordering::Less; }
-            if fb.name == ".." { return std::cmp::Ordering::Greater; }
+            if fa.name == ".." {
+                return std::cmp::Ordering::Less;
+            }
+            if fb.name == ".." {
+                return std::cmp::Ordering::Greater;
+            }
             // Dirs before files
             if fa.is_dir != fb.is_dir {
-                return if fa.is_dir { std::cmp::Ordering::Less } else { std::cmp::Ordering::Greater };
+                return if fa.is_dir {
+                    std::cmp::Ordering::Less
+                } else {
+                    std::cmp::Ordering::Greater
+                };
             }
             // Sort within same type
             let cmp = match col {

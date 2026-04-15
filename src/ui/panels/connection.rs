@@ -13,8 +13,8 @@ use crate::ui::style::theme;
 /// An entry in the connection list (either SSH host, saved connection, or manual).
 #[derive(Debug, Clone)]
 pub enum ConnectionEntry {
-    SshHost(usize),       // index into ssh_hosts
-    Saved(usize),         // index into saved_connections
+    SshHost(usize), // index into ssh_hosts
+    Saved(usize),   // index into saved_connections
     Manual,
 }
 
@@ -207,7 +207,7 @@ impl ConnectionPanel {
         let border_color = theme::color_border_focus();
 
         let block = Block::default()
-            .title(format!(" Connections "))
+            .title(" Connections ".to_string())
             .borders(Borders::ALL)
             .border_style(Style::default().fg(border_color));
         let inner = block.inner(area);

@@ -14,16 +14,16 @@ jobs:
         include:
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
-            name: lazy-aws-linux-x86_64
+            name: lazy-transfer-linux-x86_64
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-latest
-            name: lazy-aws-linux-aarch64
+            name: lazy-transfer-linux-aarch64
           - target: x86_64-apple-darwin
-            os: macos-latest
-            name: lazy-aws-macos-x86_64
+            os: macos-13
+            name: lazy-transfer-macos-x86_64
           - target: aarch64-apple-darwin
             os: macos-latest
-            name: lazy-aws-macos-aarch64
+            name: lazy-transfer-macos-aarch64
 
     runs-on: ${{ matrix.os }}
 
@@ -46,7 +46,7 @@ jobs:
       - name: Package
         run: |
           cd target/${{ matrix.target }}/release
-          tar czf ../../../${{ matrix.name }}.tar.gz lazy-aws
+          tar czf ../../../${{ matrix.name }}.tar.gz lazy-transfer
           cd ../../..
 
       - name: Upload artifact

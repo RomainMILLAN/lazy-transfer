@@ -22,6 +22,12 @@ pub struct RemoteFilesPanel {
     pub sort_order: SortOrder,
 }
 
+impl Default for RemoteFilesPanel {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl RemoteFilesPanel {
     pub fn new() -> Self {
         RemoteFilesPanel {
@@ -43,7 +49,11 @@ impl RemoteFilesPanel {
         self.rebuild_filter();
         // Restore cursor position, clamped to new list size
         let count = self.filtered.len();
-        self.cursor = if count == 0 { 0 } else { prev_cursor.min(count - 1) };
+        self.cursor = if count == 0 {
+            0
+        } else {
+            prev_cursor.min(count - 1)
+        };
     }
 
     pub fn set_dir(&mut self, dir: &str) {
@@ -119,10 +129,18 @@ impl RemoteFilesPanel {
         self.filtered.sort_by(|&a, &b| {
             let fa = &files[a];
             let fb = &files[b];
-            if fa.name == ".." { return std::cmp::Ordering::Less; }
-            if fb.name == ".." { return std::cmp::Ordering::Greater; }
+            if fa.name == ".." {
+                return std::cmp::Ordering::Less;
+            }
+            if fb.name == ".." {
+                return std::cmp::Ordering::Greater;
+            }
             if fa.is_dir != fb.is_dir {
-                return if fa.is_dir { std::cmp::Ordering::Less } else { std::cmp::Ordering::Greater };
+                return if fa.is_dir {
+                    std::cmp::Ordering::Less
+                } else {
+                    std::cmp::Ordering::Greater
+                };
             }
             let cmp = match col {
                 SortColumn::Name => fa.name.to_lowercase().cmp(&fb.name.to_lowercase()),
@@ -209,7 +227,14 @@ impl RemoteFilesPanel {
         }
     }
 
-    pub fn render(&self, area: Rect, buf: &mut Buffer, is_active: bool, loading: bool, filtering: bool) {
+    pub fn render(
+        &self,
+        area: Rect,
+        buf: &mut Buffer,
+        is_active: bool,
+        loading: bool,
+        filtering: bool,
+    ) {
         let border_color = if filtering && is_active {
             theme::color_warning()
         } else if is_active {

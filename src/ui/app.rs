@@ -33,15 +33,32 @@ use super::components::statusbar::{browser_hints, connection_hints};
 // --- Background messages ---
 
 enum BgMsg {
-    ConnectionSuccess { home_dir: String },
-    ConnectionReady { backend: Arc<dyn RemoteBackend>, home_dir: String },
+    ConnectionSuccess {
+        home_dir: String,
+    },
+    ConnectionReady {
+        backend: Arc<dyn RemoteBackend>,
+        home_dir: String,
+    },
     ConnectionError(String),
     RemoteFilesLoaded(Vec<FileEntry>),
     RemoteFilesError(String),
-    TransferProgress { job_id: usize, percent: u8, speed: String },
-    TransferComplete { job_id: usize },
-    TransferError { job_id: usize, error: String },
-    OperationSuccess { is_remote: bool, message: String },
+    TransferProgress {
+        job_id: usize,
+        percent: u8,
+        speed: String,
+    },
+    TransferComplete {
+        job_id: usize,
+    },
+    TransferError {
+        job_id: usize,
+        error: String,
+    },
+    OperationSuccess {
+        is_remote: bool,
+        message: String,
+    },
     OperationError(String),
 }
 
@@ -76,11 +93,23 @@ enum InputMode {
 
 /// Tracks what action triggered a confirm dialog.
 enum PendingAction {
-    DeleteLocal { path: String },
-    DeleteRemote { path: String },
-    OverwriteUpload { local_path: String, remote_path: String },
-    OverwriteDownload { remote_path: String, local_path: String },
-    DeleteSavedConnection { index: usize },
+    DeleteLocal {
+        path: String,
+    },
+    DeleteRemote {
+        path: String,
+    },
+    OverwriteUpload {
+        local_path: String,
+        remote_path: String,
+    },
+    OverwriteDownload {
+        remote_path: String,
+        local_path: String,
+    },
+    DeleteSavedConnection {
+        index: usize,
+    },
     SaveConnection,
 }
 
@@ -305,7 +334,8 @@ impl App {
         let panel_y = 2;
 
         let panel_area = Rect::new(panel_x, panel_y, panel_w, panel_h);
-        self.connection_panel.render(panel_area, buf, self.connecting, self.filtering);
+        self.connection_panel
+            .render(panel_area, buf, self.connecting, self.filtering);
 
         // Info message
         if let Some(ref msg) = self.info_msg {
@@ -337,8 +367,12 @@ impl App {
             let local_area = Rect::new(0, y, l.left_width, l.browser_h);
             let remote_area = Rect::new(l.left_width, y, l.right_width, l.browser_h);
 
-            self.local_files
-                .render(local_area, buf, self.active_pane == ActivePane::Local, self.filtering);
+            self.local_files.render(
+                local_area,
+                buf,
+                self.active_pane == ActivePane::Local,
+                self.filtering,
+            );
             self.remote_files.render(
                 remote_area,
                 buf,
@@ -559,59 +593,67 @@ impl App {
                 // Exit filter mode, keep filter applied
                 self.filtering = false;
             }
-            crossterm::event::KeyCode::Backspace => {
-                match self.screen {
-                    AppScreen::ConnectionSelect => {
-                        if self.connection_panel.filter.is_empty() {
+            crossterm::event::KeyCode::Backspace => match self.screen {
+                AppScreen::ConnectionSelect => {
+                    if self.connection_panel.filter.is_empty() {
+                        self.filtering = false;
+                    } else {
+                        self.connection_panel.filter_pop();
+                    }
+                }
+                AppScreen::FileBrowser => match self.active_pane {
+                    ActivePane::Local => {
+                        if self.local_files.filter.is_empty() {
                             self.filtering = false;
                         } else {
-                            self.connection_panel.filter_pop();
+                            self.local_files.filter_pop();
                         }
                     }
-                    AppScreen::FileBrowser => match self.active_pane {
-                        ActivePane::Local => {
-                            if self.local_files.filter.is_empty() {
-                                self.filtering = false;
-                            } else {
-                                self.local_files.filter_pop();
-                            }
+                    ActivePane::Remote => {
+                        if self.remote_files.filter.is_empty() {
+                            self.filtering = false;
+                        } else {
+                            self.remote_files.filter_pop();
                         }
-                        ActivePane::Remote => {
-                            if self.remote_files.filter.is_empty() {
-                                self.filtering = false;
-                            } else {
-                                self.remote_files.filter_pop();
-                            }
-                        }
-                    },
-                }
-            }
+                    }
+                },
+            },
             crossterm::event::KeyCode::Up | crossterm::event::KeyCode::Down => {
                 // Allow navigation while filtering
                 let is_up = key.code == crossterm::event::KeyCode::Up;
                 match self.screen {
                     AppScreen::ConnectionSelect => {
-                        if is_up { self.connection_panel.move_up() } else { self.connection_panel.move_down() }
+                        if is_up {
+                            self.connection_panel.move_up()
+                        } else {
+                            self.connection_panel.move_down()
+                        }
                     }
                     AppScreen::FileBrowser => match self.active_pane {
                         ActivePane::Local => {
-                            if is_up { self.local_files.move_up() } else { self.local_files.move_down() }
+                            if is_up {
+                                self.local_files.move_up()
+                            } else {
+                                self.local_files.move_down()
+                            }
                         }
                         ActivePane::Remote => {
-                            if is_up { self.remote_files.move_up() } else { self.remote_files.move_down() }
+                            if is_up {
+                                self.remote_files.move_up()
+                            } else {
+                                self.remote_files.move_down()
+                            }
                         }
                     },
                 }
             }
-            crossterm::event::KeyCode::Char(c) => {
-                match self.screen {
-                    AppScreen::ConnectionSelect => self.connection_panel.filter_push(c),
-                    AppScreen::FileBrowser => match self.active_pane {
-                        ActivePane::Local => self.local_files.filter_push(c),
-                        ActivePane::Remote => self.remote_files.filter_push(c),
-                    },
-                }
-            }
+            crossterm::event::KeyCode::Char(c) => match self.screen {
+                AppScreen::ConnectionSelect => self.connection_panel.filter_push(c),
+                AppScreen::FileBrowser => match self.active_pane {
+                    ActivePane::Local => self.local_files.filter_push(c),
+                    ActivePane::Remote => self.remote_files.filter_push(c),
+                },
+            },
             _ => {}
         }
         false
@@ -639,10 +681,12 @@ impl App {
             if self.connection_panel.selected_saved_index().is_some() {
                 if let Some(saved) = self.connection_panel.selected_saved() {
                     let name = saved.name.clone();
-                    self.confirm.show(&format!("Remove saved connection '{}'?", name));
+                    self.confirm
+                        .show(&format!("Remove saved connection '{}'?", name));
                     // Store the index for deletion after confirmation
                     if let Some(idx) = self.connection_panel.selected_saved_index() {
-                        self.pending_action = Some(PendingAction::DeleteSavedConnection { index: idx });
+                        self.pending_action =
+                            Some(PendingAction::DeleteSavedConnection { index: idx });
                     }
                 }
             }
@@ -671,7 +715,8 @@ impl App {
                 // Start the manual flow at the host step, pre-filled
                 self.is_manual_connect = true;
                 self.input_mode = InputMode::ManualHost;
-                self.input.show_with_value("Host", "hostname or IP...", &saved.host);
+                self.input
+                    .show_with_value("Host", "hostname or IP...", &saved.host);
             }
             return;
         }
@@ -749,9 +794,18 @@ impl App {
             self.choice.show(
                 "Sort by:",
                 vec![
-                    Choice { key: 'n', label: "Name".to_string() },
-                    Choice { key: 's', label: "Size".to_string() },
-                    Choice { key: 't', label: "Date".to_string() },
+                    Choice {
+                        key: 'n',
+                        label: "Name".to_string(),
+                    },
+                    Choice {
+                        key: 's',
+                        label: "Size".to_string(),
+                    },
+                    Choice {
+                        key: 't',
+                        label: "Date".to_string(),
+                    },
                 ],
             );
             self.input_mode = InputMode::SortChoice;
@@ -852,7 +906,10 @@ impl App {
                 self.input_mode = InputMode::ManualPort;
                 // Pre-fill port from pending (edit) or default
                 let port = if self.pending_port.is_empty() {
-                    self.connection_panel.selected_protocol.default_port().to_string()
+                    self.connection_panel
+                        .selected_protocol
+                        .default_port()
+                        .to_string()
                 } else {
                     self.pending_port.clone()
                 };
@@ -934,11 +991,10 @@ impl App {
             InputMode::SaveConnectionName => {
                 if let Some(ref conn) = self.connection {
                     let pw = self.pending_password.as_deref();
-                    let saved = crate::transfer::connections::SavedConnection::from_connection_config(
-                        &value,
-                        conn,
-                        pw,
-                    );
+                    let saved =
+                        crate::transfer::connections::SavedConnection::from_connection_config(
+                            &value, conn, pw,
+                        );
                     let mut conns = crate::transfer::connections::load();
                     conns.entries.push(saved);
                     if let Err(e) = crate::transfer::connections::save(&conns) {
@@ -1073,7 +1129,10 @@ impl App {
             Protocol::Ftp => {
                 // FTP needs a password — this path is for manual connections
                 // where password is not yet known. For saved connections, use connect_saved.
-                self.info_msg = Some("FTP requires a password. Use manual connection or saved connections.".to_string());
+                self.info_msg = Some(
+                    "FTP requires a password. Use manual connection or saved connections."
+                        .to_string(),
+                );
             }
         }
     }
@@ -1113,12 +1172,7 @@ impl App {
         };
 
         let exec = Arc::new(RealExecutor::new(
-            &ssh_bin,
-            &scp_bin,
-            &conn.user,
-            &conn.host,
-            conn.port,
-            identity,
+            &ssh_bin, &scp_bin, &conn.user, &conn.host, conn.port, identity,
         ));
         let runner: Arc<dyn RemoteBackend> = Arc::new(SshRunner::new(exec));
 
@@ -1146,7 +1200,13 @@ impl App {
         let user = conn.user.clone();
         let auth = conn.auth.clone();
 
-        log::info!("connect_sftp: {}@{}:{} (password={})", user, host, port, password.is_some());
+        log::info!(
+            "connect_sftp: {}@{}:{} (password={})",
+            user,
+            host,
+            port,
+            password.is_some()
+        );
 
         self.connection = Some(conn);
         let tx = self.bg_tx.clone();
@@ -1154,7 +1214,9 @@ impl App {
         thread::spawn(move || {
             log::info!("connect_sftp thread: starting SftpBackend::connect");
             let result = if let Some(pw) = password {
-                crate::transfer::sftp_backend::SftpBackend::connect_with_password(&host, port, &user, &pw)
+                crate::transfer::sftp_backend::SftpBackend::connect_with_password(
+                    &host, port, &user, &pw,
+                )
             } else {
                 crate::transfer::sftp_backend::SftpBackend::connect(&host, port, &user, &auth)
             };
@@ -1241,11 +1303,16 @@ impl App {
 
         let status = std::process::Command::new(&self.config.ssh_bin)
             .args([
-                "-o", "ConnectTimeout=10",
-                "-o", &format!("ControlPath={}", control_path),
-                "-o", "ControlMaster=auto",
-                "-o", "ControlPersist=600",
-                "-p", &conn.port.to_string(),
+                "-o",
+                "ConnectTimeout=10",
+                "-o",
+                &format!("ControlPath={}", control_path),
+                "-o",
+                "ControlMaster=auto",
+                "-o",
+                "ControlPersist=600",
+                "-p",
+                &conn.port.to_string(),
                 &target,
                 "echo ok && echo $HOME",
             ])
@@ -1373,12 +1440,19 @@ impl App {
                     self.info_msg = Some(format!("Error: {}", e));
                     log::error!("remote files error: {e}");
                 }
-                BgMsg::TransferProgress { job_id, percent, speed } => {
+                BgMsg::TransferProgress {
+                    job_id,
+                    percent,
+                    speed,
+                } => {
                     self.transfers.update_progress(job_id, percent, speed);
                 }
                 BgMsg::TransferComplete { job_id } => {
                     // Determine direction before marking complete
-                    let direction = self.transfers.jobs.iter()
+                    let direction = self
+                        .transfers
+                        .jobs
+                        .iter()
                         .find(|j| j.id == job_id)
                         .map(|j| j.direction.clone());
                     self.transfers.complete_job(job_id);
@@ -1443,9 +1517,16 @@ impl App {
                 if exists_on_remote {
                     self.pending_action = Some(PendingAction::OverwriteUpload {
                         local_path,
-                        remote_path: if entry.is_dir { remote_dir } else { remote_path },
+                        remote_path: if entry.is_dir {
+                            remote_dir
+                        } else {
+                            remote_path
+                        },
                     });
-                    self.confirm.show(&format!("'{}' already exists on remote. Overwrite?", entry.name));
+                    self.confirm.show(&format!(
+                        "'{}' already exists on remote. Overwrite?",
+                        entry.name
+                    ));
                 } else if entry.is_dir {
                     self.do_upload_dir(&local_path, &remote_dir, &entry.name);
                 } else {
@@ -1471,7 +1552,10 @@ impl App {
                         remote_path,
                         local_path: if entry.is_dir { local_dest } else { local_path },
                     });
-                    self.confirm.show(&format!("'{}' already exists locally. Overwrite?", entry.name));
+                    self.confirm.show(&format!(
+                        "'{}' already exists locally. Overwrite?",
+                        entry.name
+                    ));
                 } else if entry.is_dir {
                     self.do_download_dir(&remote_path, &local_dest, &entry.name);
                 } else {
@@ -1509,10 +1593,7 @@ impl App {
                 Self::monitor_transfer(handle, job_id, tx);
             }
             Err(e) => {
-                let _ = tx.send(BgMsg::TransferError {
-                    job_id,
-                    error: e,
-                });
+                let _ = tx.send(BgMsg::TransferError { job_id, error: e });
             }
         });
     }
@@ -1551,10 +1632,7 @@ impl App {
                 Self::monitor_transfer(handle, job_id, tx);
             }
             Err(e) => {
-                let _ = tx.send(BgMsg::TransferError {
-                    job_id,
-                    error: e,
-                });
+                let _ = tx.send(BgMsg::TransferError { job_id, error: e });
             }
         });
     }
@@ -1664,8 +1742,7 @@ impl App {
                     }
                     let path = format!("{}/{}", self.local_files.current_dir, entry.name);
                     self.pending_action = Some(PendingAction::DeleteLocal { path });
-                    self.confirm
-                        .show(&format!("Delete '{}'?", entry.name));
+                    self.confirm.show(&format!("Delete '{}'?", entry.name));
                 }
             }
             ActivePane::Remote => {
@@ -1679,8 +1756,7 @@ impl App {
                         format!("{}/{}", self.remote_files.current_dir, entry.name)
                     };
                     self.pending_action = Some(PendingAction::DeleteRemote { path });
-                    self.confirm
-                        .show(&format!("Delete '{}'?", entry.name));
+                    self.confirm.show(&format!("Delete '{}'?", entry.name));
                 }
             }
         }
@@ -1705,8 +1781,8 @@ impl App {
         if let Some(action) = self.pending_action.take() {
             match action {
                 PendingAction::DeleteLocal { path } => {
-                    if let Err(e) = std::fs::remove_file(&path)
-                        .or_else(|_| std::fs::remove_dir_all(&path))
+                    if let Err(e) =
+                        std::fs::remove_file(&path).or_else(|_| std::fs::remove_dir_all(&path))
                     {
                         self.info_msg = Some(format!("Delete failed: {}", e));
                     } else {
@@ -1758,7 +1834,11 @@ impl App {
                         .unwrap_or(&remote_path)
                         .to_string();
                     // Check if remote is a dir by looking at the file list
-                    let is_dir = self.remote_files.files.iter().any(|f| f.name == name && f.is_dir);
+                    let is_dir = self
+                        .remote_files
+                        .files
+                        .iter()
+                        .any(|f| f.name == name && f.is_dir);
                     if is_dir {
                         self.do_download_dir(&remote_path, &local_path, &name);
                     } else {
@@ -1767,7 +1847,8 @@ impl App {
                 }
                 PendingAction::SaveConnection => {
                     self.input_mode = InputMode::SaveConnectionName;
-                    self.input.show("Connection Name", "name for this connection...");
+                    self.input
+                        .show("Connection Name", "name for this connection...");
                 }
                 PendingAction::DeleteSavedConnection { index } => {
                     let mut conns = crate::transfer::connections::load();

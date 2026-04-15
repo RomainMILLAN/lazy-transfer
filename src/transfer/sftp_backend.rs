@@ -25,7 +25,9 @@ impl SftpHandle {
         // and Sftp is dropped before Session because of field order (sftp first).
         let sftp = unsafe {
             let session_ref: &ssh2::Session = &*(&*session as *const ssh2::Session);
-            session_ref.sftp().map_err(|e| format!("sftp subsystem: {}", e))?
+            session_ref
+                .sftp()
+                .map_err(|e| format!("sftp subsystem: {}", e))?
         };
         Ok(SftpHandle {
             sftp,
@@ -103,12 +105,7 @@ impl SftpBackend {
         })
     }
 
-    pub fn connect(
-        host: &str,
-        port: u16,
-        user: &str,
-        auth: &AuthMethod,
-    ) -> Result<Self, String> {
+    pub fn connect(host: &str, port: u16, user: &str, auth: &AuthMethod) -> Result<Self, String> {
         log::info!("sftp: connect {}@{}:{} auth={:?}", user, host, port, auth);
         let session = Self::create_session(host, port)?;
 
@@ -126,7 +123,9 @@ impl SftpBackend {
                     .map_err(|e| format!("agent auth failed: {}", e))?;
             }
             AuthMethod::Password => {
-                return Err("SFTP password auth requires password — use connect_with_password".to_string());
+                return Err(
+                    "SFTP password auth requires password — use connect_with_password".to_string(),
+                );
             }
         }
 
@@ -229,9 +228,19 @@ impl RemoteBackend for SftpBackend {
             let modified = stat.mtime.map(format_unix_time).unwrap_or_default();
             let permissions = stat.perm.map(format_permissions).unwrap_or_default();
 
-            let entry = FileEntry { name, is_dir, size, modified, permissions };
+            let entry = FileEntry {
+                name,
+                is_dir,
+                size,
+                modified,
+                permissions,
+            };
 
-            if is_dir { dirs.push(entry); } else { files.push(entry); }
+            if is_dir {
+                dirs.push(entry);
+            } else {
+                files.push(entry);
+            }
         }
 
         dirs.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
@@ -245,7 +254,10 @@ impl RemoteBackend for SftpBackend {
     fn mkdir(&self, path: &str) -> Result<(), String> {
         log::debug!("sftp mkdir: {}", path);
         let handle = self.handle.lock().map_err(|e| e.to_string())?;
-        handle.sftp.mkdir(Path::new(path), 0o755).map_err(|e| format!("mkdir: {}", e))
+        handle
+            .sftp
+            .mkdir(Path::new(path), 0o755)
+            .map_err(|e| format!("mkdir: {}", e))
     }
 
     fn delete(&self, path: &str) -> Result<(), String> {
@@ -260,7 +272,10 @@ impl RemoteBackend for SftpBackend {
     fn rename(&self, from: &str, to: &str) -> Result<(), String> {
         log::debug!("sftp rename: {} -> {}", from, to);
         let handle = self.handle.lock().map_err(|e| e.to_string())?;
-        handle.sftp.rename(Path::new(from), Path::new(to), None).map_err(|e| format!("rename: {}", e))
+        handle
+            .sftp
+            .rename(Path::new(from), Path::new(to), None)
+            .map_err(|e| format!("rename: {}", e))
     }
 
     fn home_dir(&self) -> Result<String, String> {
@@ -269,7 +284,8 @@ impl RemoteBackend for SftpBackend {
 
     fn test_connection(&self) -> Result<String, String> {
         let handle = self.handle.lock().map_err(|e| e.to_string())?;
-        let real = handle.sftp
+        let real = handle
+            .sftp
             .realpath(Path::new("."))
             .map_err(|e| format!("realpath: {}", e))?;
         Ok(real.to_string_lossy().to_string())
@@ -280,8 +296,8 @@ impl RemoteBackend for SftpBackend {
         let local_path = local_path.to_string();
         let remote_path = remote_path.to_string();
 
-        let local_file = std::fs::File::open(&local_path)
-            .map_err(|e| format!("open local: {}", e))?;
+        let local_file =
+            std::fs::File::open(&local_path).map_err(|e| format!("open local: {}", e))?;
         let total_size = local_file.metadata().map(|m| m.len()).unwrap_or(0);
 
         let handle_ptr = &self.handle as *const Mutex<SftpHandle> as usize;
@@ -292,7 +308,9 @@ impl RemoteBackend for SftpBackend {
             let result = (|| -> Result<(), String> {
                 let handle = handle_mutex.lock().map_err(|e| e.to_string())?;
 
-                let mut remote_file = handle.sftp.create(Path::new(&remote_path))
+                let mut remote_file = handle
+                    .sftp
+                    .create(Path::new(&remote_path))
                     .map_err(|e| format!("create: {}", e))?;
                 let mut local = std::io::BufReader::new(
                     std::fs::File::open(&local_path).map_err(|e| format!("open: {}", e))?,
@@ -304,14 +322,22 @@ impl RemoteBackend for SftpBackend {
 
                 loop {
                     let n = local.read(&mut buf).map_err(|e| format!("read: {}", e))?;
-                    if n == 0 { break; }
-                    remote_file.write_all(&buf[..n]).map_err(|e| format!("write: {}", e))?;
+                    if n == 0 {
+                        break;
+                    }
+                    remote_file
+                        .write_all(&buf[..n])
+                        .map_err(|e| format!("write: {}", e))?;
                     sent += n as u64;
                     if total_size > 0 {
                         let pct = (sent * 100 / total_size) as u8;
                         if pct > last_pct {
                             last_pct = pct;
-                            let _ = tx.send(StreamLine { text: format!("{}%", pct), err: None, done: false });
+                            let _ = tx.send(StreamLine {
+                                text: format!("{}%", pct),
+                                err: None,
+                                done: false,
+                            });
                         }
                     }
                 }
@@ -319,12 +345,28 @@ impl RemoteBackend for SftpBackend {
             })();
 
             match result {
-                Ok(()) => { let _ = tx.send(StreamLine { text: String::new(), err: None, done: true }); }
-                Err(e) => { log::error!("sftp upload error: {}", e); let _ = tx.send(StreamLine { text: String::new(), err: Some(e), done: true }); }
+                Ok(()) => {
+                    let _ = tx.send(StreamLine {
+                        text: String::new(),
+                        err: None,
+                        done: true,
+                    });
+                }
+                Err(e) => {
+                    log::error!("sftp upload error: {}", e);
+                    let _ = tx.send(StreamLine {
+                        text: String::new(),
+                        err: Some(e),
+                        done: true,
+                    });
+                }
             }
         });
 
-        Ok(StreamHandle { rx, child_pid: None })
+        Ok(StreamHandle {
+            rx,
+            child_pid: None,
+        })
     }
 
     fn download(&self, remote_path: &str, local_path: &str) -> Result<StreamHandle, String> {
@@ -340,28 +382,43 @@ impl RemoteBackend for SftpBackend {
             let result = (|| -> Result<(), String> {
                 let handle = handle_mutex.lock().map_err(|e| e.to_string())?;
 
-                let stat = handle.sftp.stat(Path::new(&remote_path)).map_err(|e| format!("stat: {}", e))?;
+                let stat = handle
+                    .sftp
+                    .stat(Path::new(&remote_path))
+                    .map_err(|e| format!("stat: {}", e))?;
                 let total_size = stat.size.unwrap_or(0);
 
-                let mut remote_file = handle.sftp.open(Path::new(&remote_path))
+                let mut remote_file = handle
+                    .sftp
+                    .open(Path::new(&remote_path))
                     .map_err(|e| format!("open: {}", e))?;
-                let mut local_file = std::fs::File::create(&local_path)
-                    .map_err(|e| format!("create: {}", e))?;
+                let mut local_file =
+                    std::fs::File::create(&local_path).map_err(|e| format!("create: {}", e))?;
 
                 let mut buf = vec![0u8; 64 * 1024];
                 let mut received: u64 = 0;
                 let mut last_pct: u8 = 0;
 
                 loop {
-                    let n = remote_file.read(&mut buf).map_err(|e| format!("read: {}", e))?;
-                    if n == 0 { break; }
-                    local_file.write_all(&buf[..n]).map_err(|e| format!("write: {}", e))?;
+                    let n = remote_file
+                        .read(&mut buf)
+                        .map_err(|e| format!("read: {}", e))?;
+                    if n == 0 {
+                        break;
+                    }
+                    local_file
+                        .write_all(&buf[..n])
+                        .map_err(|e| format!("write: {}", e))?;
                     received += n as u64;
                     if total_size > 0 {
                         let pct = (received * 100 / total_size) as u8;
                         if pct > last_pct {
                             last_pct = pct;
-                            let _ = tx.send(StreamLine { text: format!("{}%", pct), err: None, done: false });
+                            let _ = tx.send(StreamLine {
+                                text: format!("{}%", pct),
+                                err: None,
+                                done: false,
+                            });
                         }
                     }
                 }
@@ -369,12 +426,28 @@ impl RemoteBackend for SftpBackend {
             })();
 
             match result {
-                Ok(()) => { let _ = tx.send(StreamLine { text: String::new(), err: None, done: true }); }
-                Err(e) => { log::error!("sftp download error: {}", e); let _ = tx.send(StreamLine { text: String::new(), err: Some(e), done: true }); }
+                Ok(()) => {
+                    let _ = tx.send(StreamLine {
+                        text: String::new(),
+                        err: None,
+                        done: true,
+                    });
+                }
+                Err(e) => {
+                    log::error!("sftp download error: {}", e);
+                    let _ = tx.send(StreamLine {
+                        text: String::new(),
+                        err: Some(e),
+                        done: true,
+                    });
+                }
             }
         });
 
-        Ok(StreamHandle { rx, child_pid: None })
+        Ok(StreamHandle {
+            rx,
+            child_pid: None,
+        })
     }
 
     fn upload_dir(&self, local_path: &str, remote_dest: &str) -> Result<StreamHandle, String> {
@@ -394,7 +467,11 @@ impl RemoteBackend for SftpBackend {
                 let handle = handle_mutex.lock().map_err(|e| e.to_string())?;
 
                 let base = std::path::Path::new(&local_path);
-                let base_name = base.file_name().unwrap_or_default().to_string_lossy().to_string();
+                let base_name = base
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .to_string();
 
                 for (i, file_path) in files.iter().enumerate() {
                     let rel = file_path.strip_prefix(base).unwrap_or(file_path);
@@ -412,7 +489,9 @@ impl RemoteBackend for SftpBackend {
                         log::debug!("sftp upload_dir: uploading {}", remote);
                         let mut local_file = std::fs::File::open(file_path)
                             .map_err(|e| format!("open {}: {}", file_path.display(), e))?;
-                        let mut remote_file = handle.sftp.create(Path::new(&remote))
+                        let mut remote_file = handle
+                            .sftp
+                            .create(Path::new(&remote))
                             .map_err(|e| format!("create {}: {}", remote, e))?;
                         std::io::copy(&mut local_file, &mut remote_file)
                             .map_err(|e| format!("copy {}: {}", remote, e))?;
@@ -420,19 +499,39 @@ impl RemoteBackend for SftpBackend {
 
                     if total > 0 {
                         let pct = ((i + 1) * 100 / total) as u8;
-                        let _ = tx.send(StreamLine { text: format!("{}%", pct), err: None, done: false });
+                        let _ = tx.send(StreamLine {
+                            text: format!("{}%", pct),
+                            err: None,
+                            done: false,
+                        });
                     }
                 }
                 Ok(())
             })();
 
             match result {
-                Ok(()) => { let _ = tx.send(StreamLine { text: String::new(), err: None, done: true }); }
-                Err(e) => { log::error!("sftp upload_dir error: {}", e); let _ = tx.send(StreamLine { text: String::new(), err: Some(e), done: true }); }
+                Ok(()) => {
+                    let _ = tx.send(StreamLine {
+                        text: String::new(),
+                        err: None,
+                        done: true,
+                    });
+                }
+                Err(e) => {
+                    log::error!("sftp upload_dir error: {}", e);
+                    let _ = tx.send(StreamLine {
+                        text: String::new(),
+                        err: Some(e),
+                        done: true,
+                    });
+                }
             }
         });
 
-        Ok(StreamHandle { rx, child_pid: None })
+        Ok(StreamHandle {
+            rx,
+            child_pid: None,
+        })
     }
 
     fn download_dir(&self, remote_path: &str, local_dest: &str) -> Result<StreamHandle, String> {
@@ -451,24 +550,54 @@ impl RemoteBackend for SftpBackend {
             })();
 
             match result {
-                Ok(()) => { let _ = tx.send(StreamLine { text: String::new(), err: None, done: true }); }
-                Err(e) => { log::error!("sftp download_dir error: {}", e); let _ = tx.send(StreamLine { text: String::new(), err: Some(e), done: true }); }
+                Ok(()) => {
+                    let _ = tx.send(StreamLine {
+                        text: String::new(),
+                        err: None,
+                        done: true,
+                    });
+                }
+                Err(e) => {
+                    log::error!("sftp download_dir error: {}", e);
+                    let _ = tx.send(StreamLine {
+                        text: String::new(),
+                        err: Some(e),
+                        done: true,
+                    });
+                }
             }
         });
 
-        Ok(StreamHandle { rx, child_pid: None })
+        Ok(StreamHandle {
+            rx,
+            child_pid: None,
+        })
     }
 }
 
 fn delete_dir_recursive(sftp: &ssh2::Sftp, path: &str) -> Result<(), String> {
-    let entries = sftp.readdir(Path::new(path)).map_err(|e| format!("readdir {}: {}", path, e))?;
+    let entries = sftp
+        .readdir(Path::new(path))
+        .map_err(|e| format!("readdir {}: {}", path, e))?;
     for (entry_path, stat) in entries {
-        let name = entry_path.file_name().unwrap_or_default().to_string_lossy().to_string();
-        if name == "." || name == ".." { continue; }
+        let name = entry_path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
+        if name == "." || name == ".." {
+            continue;
+        }
         let full = format!("{}/{}", path.trim_end_matches('/'), name);
-        if stat.is_dir() { delete_dir_recursive(sftp, &full)?; } else { sftp.unlink(Path::new(&full)).map_err(|e| format!("rm {}: {}", full, e))?; }
+        if stat.is_dir() {
+            delete_dir_recursive(sftp, &full)?;
+        } else {
+            sftp.unlink(Path::new(&full))
+                .map_err(|e| format!("rm {}: {}", full, e))?;
+        }
     }
-    sftp.rmdir(Path::new(path)).map_err(|e| format!("rmdir {}: {}", path, e))
+    sftp.rmdir(Path::new(path))
+        .map_err(|e| format!("rmdir {}: {}", path, e))
 }
 
 fn collect_local_files(path: &str) -> Result<Vec<std::path::PathBuf>, String> {

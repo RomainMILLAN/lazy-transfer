@@ -116,7 +116,13 @@ impl TransfersPanel {
         let visible_h = inner.height as usize;
         self.auto_scroll(visible_h);
 
-        for (i, job) in self.jobs.iter().skip(self.scroll).take(visible_h).enumerate() {
+        for (i, job) in self
+            .jobs
+            .iter()
+            .skip(self.scroll)
+            .take(visible_h)
+            .enumerate()
+        {
             let y = inner.y + i as u16;
 
             let arrow = match job.direction {
@@ -172,7 +178,12 @@ impl TransfersPanel {
 
         // Scroll indicator if there are more jobs than visible
         if total > visible_h {
-            let indicator = format!(" {}-{}/{} ", self.scroll + 1, (self.scroll + visible_h).min(total), total);
+            let indicator = format!(
+                " {}-{}/{} ",
+                self.scroll + 1,
+                (self.scroll + visible_h).min(total),
+                total
+            );
             let ind_style = Style::default().fg(theme::color_muted());
             let x = inner.x + inner.width.saturating_sub(indicator.len() as u16 + 1);
             buf.set_string(x, area.y, &indicator, ind_style);
@@ -184,11 +195,7 @@ impl TransfersPanel {
 fn render_progress_bar(percent: u8, width: usize) -> String {
     let filled = (percent as usize * width) / 100;
     let empty = width.saturating_sub(filled);
-    format!(
-        "[{}{}]",
-        "━".repeat(filled),
-        "░".repeat(empty)
-    )
+    format!("[{}{}]", "━".repeat(filled), "░".repeat(empty))
 }
 
 #[cfg(test)]
