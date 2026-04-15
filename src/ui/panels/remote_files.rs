@@ -6,7 +6,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Widget};
 
-use crate::transfer::types::FileEntry;
+use crate::transfer::types::{FileEntry, SortColumn, SortOrder};
 use crate::ui::style::theme;
 use crate::ui::text::format_size;
 
@@ -18,6 +18,8 @@ pub struct RemoteFilesPanel {
     pub filter: String,
     pub cursor: usize,
     pub show_hidden: bool,
+    pub sort_column: SortColumn,
+    pub sort_order: SortOrder,
 }
 
 impl RemoteFilesPanel {
@@ -29,6 +31,8 @@ impl RemoteFilesPanel {
             filter: String::new(),
             cursor: 0,
             show_hidden: false,
+            sort_column: SortColumn::Name,
+            sort_order: SortOrder::Asc,
         }
     }
 
@@ -57,6 +61,16 @@ impl RemoteFilesPanel {
 
     pub fn toggle_hidden(&mut self) {
         self.show_hidden = !self.show_hidden;
+        self.rebuild_filter();
+    }
+
+    pub fn cycle_sort(&mut self, column: SortColumn) {
+        if self.sort_column == column {
+            self.sort_order = self.sort_order.toggle();
+        } else {
+            self.sort_column = column;
+            self.sort_order = SortOrder::Asc;
+        }
         self.rebuild_filter();
     }
 
@@ -98,6 +112,28 @@ impl RemoteFilesPanel {
             scored.sort_by(|a, b| b.1.cmp(&a.1));
             self.filtered = scored.into_iter().map(|(i, _)| i).collect();
         }
+
+        let files = &self.files;
+        let col = self.sort_column;
+        let ord = self.sort_order;
+        self.filtered.sort_by(|&a, &b| {
+            let fa = &files[a];
+            let fb = &files[b];
+            if fa.name == ".." { return std::cmp::Ordering::Less; }
+            if fb.name == ".." { return std::cmp::Ordering::Greater; }
+            if fa.is_dir != fb.is_dir {
+                return if fa.is_dir { std::cmp::Ordering::Less } else { std::cmp::Ordering::Greater };
+            }
+            let cmp = match col {
+                SortColumn::Name => fa.name.to_lowercase().cmp(&fb.name.to_lowercase()),
+                SortColumn::Size => fa.size.cmp(&fb.size),
+                SortColumn::Date => fa.modified.cmp(&fb.modified),
+            };
+            match ord {
+                SortOrder::Asc => cmp,
+                SortOrder::Desc => cmp.reverse(),
+            }
+        });
 
         let count = self.filtered.len();
         if self.cursor >= count && count > 0 {
@@ -199,12 +235,13 @@ impl RemoteFilesPanel {
             format!("{}/{}", self.filtered.len(), self.files.len())
         };
 
+        let sort_text = format!(" {}{}", self.sort_column.label(), self.sort_order.arrow());
         let title = if self.current_dir.is_empty() {
-            format!(" Remote [{}]{} ", count_text, filter_text)
+            format!(" Remote [{}]{}{} ", count_text, sort_text, filter_text)
         } else {
             format!(
-                " Remote ({}) [{}]{} ",
-                self.current_dir, count_text, filter_text
+                " Remote ({}) [{}]{}{} ",
+                self.current_dir, count_text, sort_text, filter_text
             )
         };
 
@@ -265,8 +302,9 @@ impl RemoteFilesPanel {
             } else {
                 format_size(entry.size)
             };
+            let date_str = &entry.modified;
 
-            let name_w = inner.width.saturating_sub(22) as usize;
+            let name_w = inner.width.saturating_sub(33) as usize;
             let name_display = if entry.name.len() > name_w {
                 format!("{:.width$}", entry.name, width = name_w)
             } else {
@@ -293,10 +331,17 @@ impl RemoteFilesPanel {
                 style
             };
 
+            let date_style = if is_selected {
+                style
+            } else {
+                Style::default().fg(theme::color_muted())
+            };
+
             let line = Line::from(vec![
                 Span::styled(format!(" {} ", icon), icon_style),
                 Span::styled(format!("{:<width$}", name_display, width = name_w), style),
                 Span::styled(format!(" {:>8}", size_str), style),
+                Span::styled(format!("  {:>16}", date_str), date_style),
             ]);
             buf.set_line(inner.x, y, &line, inner.width);
         }

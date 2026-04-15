@@ -9,19 +9,22 @@ pub struct Config {
 
 #[derive(Debug, Error)]
 pub enum ConfigError {
-    #[error("'{0}' not found in PATH. Please install OpenSSH.")]
-    BinaryNotFound(String),
     #[error("cannot determine current directory: {0}")]
     CurrentDir(String),
 }
 
-/// Resolves configuration: validates ssh/scp are available, captures CWD.
+/// Resolves configuration: captures CWD, resolves SSH/SCP binaries (non-fatal if missing).
 pub fn resolve() -> Result<Config, ConfigError> {
     let ssh_bin = std::env::var("SSH_BIN").unwrap_or_else(|_| "ssh".to_string());
     let scp_bin = std::env::var("SCP_BIN").unwrap_or_else(|_| "scp".to_string());
 
-    which::which(&ssh_bin).map_err(|_| ConfigError::BinaryNotFound(ssh_bin.clone()))?;
-    which::which(&scp_bin).map_err(|_| ConfigError::BinaryNotFound(scp_bin.clone()))?;
+    // Warn if SSH/SCP not found, but don't fail (user may only use FTP/SFTP)
+    if which::which(&ssh_bin).is_err() {
+        log::warn!("{ssh_bin} not found in PATH — SSH/SCP protocol will not work");
+    }
+    if which::which(&scp_bin).is_err() {
+        log::warn!("{scp_bin} not found in PATH — SSH/SCP protocol will not work");
+    }
 
     let start_dir = std::env::current_dir()
         .map_err(|e| ConfigError::CurrentDir(e.to_string()))?

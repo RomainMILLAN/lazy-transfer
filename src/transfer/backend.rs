@@ -1,6 +1,6 @@
 use crate::transfer::types::FileEntry;
 
-use super::exec::StreamHandle;
+use super::stream::StreamHandle;
 
 /// RemoteBackend abstracts remote filesystem operations.
 /// V1: SSH/SCP implementation. Future: FTP, SFTP.

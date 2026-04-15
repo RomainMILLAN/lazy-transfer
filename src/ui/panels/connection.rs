@@ -6,26 +6,88 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Widget};
 
-use crate::transfer::types::SshHost;
+use crate::transfer::connections::SavedConnection;
+use crate::transfer::types::{Protocol, SshHost};
 use crate::ui::style::theme;
 
-/// ConnectionPanel shows available SSH hosts from ~/.ssh/config.
+/// An entry in the connection list (either SSH host, saved connection, or manual).
+#[derive(Debug, Clone)]
+pub enum ConnectionEntry {
+    SshHost(usize),       // index into ssh_hosts
+    Saved(usize),         // index into saved_connections
+    Manual,
+}
+
+/// ConnectionPanel shows available connections with protocol tabs.
 pub struct ConnectionPanel {
-    pub hosts: Vec<SshHost>,
+    pub ssh_hosts: Vec<SshHost>,
+    pub saved_connections: Vec<SavedConnection>,
+    pub selected_protocol: Protocol,
+    entries: Vec<ConnectionEntry>,
     filtered: Vec<usize>,
     pub filter: String,
     pub cursor: usize,
 }
 
 impl ConnectionPanel {
-    pub fn new(hosts: Vec<SshHost>) -> Self {
-        let filtered: Vec<usize> = (0..hosts.len()).collect();
-        ConnectionPanel {
-            hosts,
-            filtered,
+    pub fn new(ssh_hosts: Vec<SshHost>, saved_connections: Vec<SavedConnection>) -> Self {
+        let mut panel = ConnectionPanel {
+            ssh_hosts,
+            saved_connections,
+            selected_protocol: Protocol::Ssh,
+            entries: Vec::new(),
+            filtered: Vec::new(),
             filter: String::new(),
             cursor: 0,
+        };
+        panel.rebuild_entries();
+        panel
+    }
+
+    pub fn select_protocol(&mut self, protocol: Protocol) {
+        if self.selected_protocol != protocol {
+            self.selected_protocol = protocol;
+            self.filter.clear();
+            self.cursor = 0;
+            self.rebuild_entries();
         }
+    }
+
+    fn rebuild_entries(&mut self) {
+        self.entries.clear();
+
+        match self.selected_protocol {
+            Protocol::Ssh => {
+                // SSH config hosts
+                for i in 0..self.ssh_hosts.len() {
+                    self.entries.push(ConnectionEntry::SshHost(i));
+                }
+                // Saved SSH connections
+                for (i, saved) in self.saved_connections.iter().enumerate() {
+                    if saved.matches_protocol(&Protocol::Ssh) {
+                        self.entries.push(ConnectionEntry::Saved(i));
+                    }
+                }
+            }
+            Protocol::Sftp => {
+                for (i, saved) in self.saved_connections.iter().enumerate() {
+                    if saved.matches_protocol(&Protocol::Sftp) {
+                        self.entries.push(ConnectionEntry::Saved(i));
+                    }
+                }
+            }
+            Protocol::Ftp => {
+                for (i, saved) in self.saved_connections.iter().enumerate() {
+                    if saved.matches_protocol(&Protocol::Ftp) {
+                        self.entries.push(ConnectionEntry::Saved(i));
+                    }
+                }
+            }
+        }
+
+        // Always add Manual at the end
+        self.entries.push(ConnectionEntry::Manual);
+        self.rebuild_filter();
     }
 
     pub fn set_filter(&mut self, filter: &str) {
@@ -49,15 +111,25 @@ impl ConnectionPanel {
 
     fn rebuild_filter(&mut self) {
         if self.filter.is_empty() {
-            self.filtered = (0..self.hosts.len()).collect();
+            self.filtered = (0..self.entries.len()).collect();
         } else {
             let matcher = SkimMatcherV2::default();
             let mut scored: Vec<(usize, i64)> = self
-                .hosts
+                .entries
                 .iter()
                 .enumerate()
-                .filter_map(|(i, h)| {
-                    let haystack = format!("{} {} {}", h.alias, h.hostname, h.user);
+                .filter_map(|(i, entry)| {
+                    let haystack = match entry {
+                        ConnectionEntry::SshHost(idx) => {
+                            let h = &self.ssh_hosts[*idx];
+                            format!("{} {} {}", h.alias, h.hostname, h.user)
+                        }
+                        ConnectionEntry::Saved(idx) => {
+                            let s = &self.saved_connections[*idx];
+                            format!("{} {} {}", s.name, s.host, s.user)
+                        }
+                        ConnectionEntry::Manual => return None, // Always show manual
+                    };
                     matcher
                         .fuzzy_match(&haystack, &self.filter)
                         .map(|score| (i, score))
@@ -65,33 +137,50 @@ impl ConnectionPanel {
                 .collect();
             scored.sort_by(|a, b| b.1.cmp(&a.1));
             self.filtered = scored.into_iter().map(|(i, _)| i).collect();
+            // Always include Manual at the end
+            let manual_idx = self.entries.len() - 1;
+            if !self.filtered.contains(&manual_idx) {
+                self.filtered.push(manual_idx);
+            }
         }
 
-        // +1 for the "Manual connection" entry
-        let count = self.total_entries();
+        let count = self.filtered.len();
         if self.cursor >= count && count > 0 {
             self.cursor = count - 1;
         }
     }
 
-    /// Total visible entries (filtered hosts + "Manual connection").
-    fn total_entries(&self) -> usize {
-        self.filtered.len() + 1
-    }
-
-    /// Returns true if the cursor is on the "Manual connection" entry.
     pub fn is_manual_selected(&self) -> bool {
-        self.cursor == self.filtered.len()
+        self.filtered
+            .get(self.cursor)
+            .map(|&i| matches!(self.entries.get(i), Some(ConnectionEntry::Manual)))
+            .unwrap_or(false)
     }
 
-    /// Returns the selected SshHost, or None if "Manual connection" is selected.
-    pub fn selected_host(&self) -> Option<&SshHost> {
-        if self.is_manual_selected() {
-            None
-        } else {
-            self.filtered
-                .get(self.cursor)
-                .and_then(|&i| self.hosts.get(i))
+    /// Returns the selected SSH host, if applicable.
+    pub fn selected_ssh_host(&self) -> Option<&SshHost> {
+        let &entry_idx = self.filtered.get(self.cursor)?;
+        match &self.entries[entry_idx] {
+            ConnectionEntry::SshHost(idx) => self.ssh_hosts.get(*idx),
+            _ => None,
+        }
+    }
+
+    /// Returns the selected saved connection, if applicable.
+    pub fn selected_saved(&self) -> Option<&SavedConnection> {
+        let &entry_idx = self.filtered.get(self.cursor)?;
+        match &self.entries[entry_idx] {
+            ConnectionEntry::Saved(idx) => self.saved_connections.get(*idx),
+            _ => None,
+        }
+    }
+
+    /// Returns the index of the selected saved connection (for deletion).
+    pub fn selected_saved_index(&self) -> Option<usize> {
+        let &entry_idx = self.filtered.get(self.cursor)?;
+        match &self.entries[entry_idx] {
+            ConnectionEntry::Saved(idx) => Some(*idx),
+            _ => None,
         }
     }
 
@@ -102,118 +191,186 @@ impl ConnectionPanel {
     }
 
     pub fn move_down(&mut self) {
-        let count = self.total_entries();
+        let count = self.filtered.len();
         if count > 0 && self.cursor < count - 1 {
             self.cursor += 1;
         }
     }
 
-    pub fn render(&self, area: Rect, buf: &mut Buffer, loading: bool) {
+    /// Reload saved connections from disk.
+    pub fn reload_saved(&mut self) {
+        self.saved_connections = crate::transfer::connections::load().entries;
+        self.rebuild_entries();
+    }
+
+    pub fn render(&self, area: Rect, buf: &mut Buffer, loading: bool, filtering: bool) {
         let border_color = theme::color_border_focus();
 
-        let filter_text = if self.filter.is_empty() {
-            String::new()
-        } else {
-            format!(" /{}", self.filter)
-        };
-        let count_text = format!("{}", self.hosts.len());
-
         let block = Block::default()
-            .title(format!(" SSH Connections [{}]{} ", count_text, filter_text))
+            .title(format!(" Connections "))
             .borders(Borders::ALL)
             .border_style(Style::default().fg(border_color));
         let inner = block.inner(area);
         block.render(area, buf);
 
-        if loading {
-            let style = Style::default().fg(theme::color_primary());
-            buf.set_string(inner.x + 1, inner.y, "Loading...", style);
+        if inner.height < 2 {
             return;
         }
 
-        if self.hosts.is_empty() && self.filter.is_empty() {
-            let style = Style::default().fg(theme::color_muted());
-            buf.set_string(
-                inner.x + 1,
-                inner.y,
-                "No SSH hosts found in ~/.ssh/config",
-                style,
-            );
+        // Render tab strip on first line
+        let tab_y = inner.y;
+        self.render_tabs(inner.x, tab_y, inner.width, buf);
+
+        let content_y = tab_y + 1;
+        let content_h = inner.height.saturating_sub(1) as usize;
+
+        // Filter indicator
+        if filtering || !self.filter.is_empty() {
+            let filter_text = if self.filter.is_empty() {
+                " /".to_string()
+            } else if filtering {
+                format!(" /{}█", self.filter)
+            } else {
+                format!(" /{}", self.filter)
+            };
+            let filter_style = Style::default().fg(theme::color_warning());
+            let fx = inner.x + inner.width.saturating_sub(filter_text.len() as u16 + 1);
+            buf.set_string(fx, tab_y, &filter_text, filter_style);
         }
 
-        let visible_h = inner.height as usize;
-        let total = self.total_entries();
-        let offset = if self.cursor >= visible_h {
-            self.cursor - visible_h + 1
+        if loading {
+            let style = Style::default().fg(theme::color_primary());
+            buf.set_string(inner.x + 1, content_y, "Connecting...", style);
+            return;
+        }
+
+        if self.filtered.is_empty() {
+            let style = Style::default().fg(theme::color_muted());
+            buf.set_string(inner.x + 1, content_y, "No connections found", style);
+            return;
+        }
+
+        let offset = if self.cursor >= content_h {
+            self.cursor - content_h + 1
         } else {
             0
         };
 
-        let mut y = 0;
-
-        // Render filtered hosts
-        for (display_idx, &host_idx) in self.filtered.iter().enumerate() {
+        let mut y = 0usize;
+        for (display_idx, &entry_idx) in self.filtered.iter().enumerate() {
             if display_idx < offset {
                 continue;
             }
-            if y >= visible_h {
+            if y >= content_h {
                 break;
             }
 
-            let host = &self.hosts[host_idx];
             let is_selected = display_idx == self.cursor;
+            let entry = &self.entries[entry_idx];
 
-            let info = if host.user.is_empty() {
-                format!("{}:{}", host.hostname, host.port)
-            } else {
-                format!("{}@{}:{}", host.user, host.hostname, host.port)
-            };
+            match entry {
+                ConnectionEntry::SshHost(idx) => {
+                    let host = &self.ssh_hosts[*idx];
+                    let info = if host.user.is_empty() {
+                        format!("{}:{}", host.hostname, host.port)
+                    } else {
+                        format!("{}@{}:{}", host.user, host.hostname, host.port)
+                    };
 
-            let style = if is_selected {
-                Style::default()
-                    .fg(theme::color_bright())
-                    .add_modifier(Modifier::BOLD | Modifier::REVERSED)
-            } else {
-                Style::default().fg(theme::color_text())
-            };
+                    let style = if is_selected {
+                        Style::default()
+                            .fg(theme::color_bright())
+                            .add_modifier(Modifier::BOLD | Modifier::REVERSED)
+                    } else {
+                        Style::default().fg(theme::color_text())
+                    };
+                    let alias_style = if is_selected {
+                        style
+                    } else {
+                        Style::default()
+                            .fg(theme::color_primary())
+                            .add_modifier(Modifier::BOLD)
+                    };
 
-            let alias_style = if is_selected {
-                style
-            } else {
+                    let line = Line::from(vec![
+                        Span::styled(format!(" {:<20}", host.alias), alias_style),
+                        Span::styled(format!(" {}", info), style),
+                    ]);
+                    buf.set_line(inner.x, content_y + y as u16, &line, inner.width);
+                }
+                ConnectionEntry::Saved(idx) => {
+                    let saved = &self.saved_connections[*idx];
+                    let info = format!("{}@{}:{}", saved.user, saved.host, saved.port);
+                    let badge = format!("[{}]", saved.protocol.to_uppercase());
+
+                    let style = if is_selected {
+                        Style::default()
+                            .fg(theme::color_bright())
+                            .add_modifier(Modifier::BOLD | Modifier::REVERSED)
+                    } else {
+                        Style::default().fg(theme::color_text())
+                    };
+                    let name_style = if is_selected {
+                        style
+                    } else {
+                        Style::default()
+                            .fg(theme::color_success())
+                            .add_modifier(Modifier::BOLD)
+                    };
+
+                    let line = Line::from(vec![
+                        Span::styled(format!(" {:<20}", saved.name), name_style),
+                        Span::styled(format!(" {} ", info), style),
+                        Span::styled(badge, Style::default().fg(theme::color_muted())),
+                    ]);
+                    buf.set_line(inner.x, content_y + y as u16, &line, inner.width);
+                }
+                ConnectionEntry::Manual => {
+                    let style = if is_selected {
+                        Style::default()
+                            .fg(theme::color_bright())
+                            .add_modifier(Modifier::BOLD | Modifier::REVERSED)
+                    } else {
+                        Style::default().fg(theme::color_info())
+                    };
+                    let line = Line::from(Span::styled(" [+] Manual connection...", style));
+                    buf.set_line(inner.x, content_y + y as u16, &line, inner.width);
+                }
+            }
+
+            y += 1;
+        }
+    }
+
+    fn render_tabs(&self, x: u16, y: u16, width: u16, buf: &mut Buffer) {
+        let tabs = [
+            ("1:SSH", Protocol::Ssh),
+            ("2:SFTP", Protocol::Sftp),
+            ("3:FTP", Protocol::Ftp),
+        ];
+
+        let mut tx = x + 1;
+        for (label, proto) in &tabs {
+            let is_active = *proto == self.selected_protocol;
+            let style = if is_active {
                 Style::default()
                     .fg(theme::color_primary())
                     .add_modifier(Modifier::BOLD)
-            };
-
-            let line = Line::from(vec![
-                Span::styled(format!(" {:<20}", host.alias), alias_style),
-                Span::styled(format!(" {}", info), style),
-            ]);
-            buf.set_line(inner.x, inner.y + y as u16, &line, inner.width);
-            y += 1;
-        }
-
-        // Separator
-        if y < visible_h && !self.filtered.is_empty() {
-            let sep_style = Style::default().fg(theme::color_muted());
-            let sep = "─".repeat(inner.width.saturating_sub(2) as usize);
-            buf.set_string(inner.x + 1, inner.y + y as u16, &sep, sep_style);
-            y += 1;
-        }
-
-        // "Manual connection" entry
-        if y < visible_h && total > offset + y {
-            let is_selected = self.is_manual_selected();
-            let style = if is_selected {
-                Style::default()
-                    .fg(theme::color_bright())
-                    .add_modifier(Modifier::BOLD | Modifier::REVERSED)
             } else {
-                Style::default().fg(theme::color_info())
+                Style::default().fg(theme::color_muted())
             };
 
-            let line = Line::from(Span::styled(" [+] Manual connection...", style));
-            buf.set_line(inner.x, inner.y + y as u16, &line, inner.width);
+            let text = if is_active {
+                format!("[{}]", label)
+            } else {
+                format!(" {} ", label)
+            };
+
+            if tx + text.len() as u16 > x + width {
+                break;
+            }
+            buf.set_string(tx, y, &text, style);
+            tx += text.len() as u16 + 1;
         }
     }
 }
@@ -243,31 +400,63 @@ mod tests {
 
     #[test]
     fn initial_state() {
-        let panel = ConnectionPanel::new(sample_hosts());
+        let panel = ConnectionPanel::new(sample_hosts(), vec![]);
         assert_eq!(panel.cursor, 0);
         assert!(!panel.is_manual_selected());
-        assert!(panel.selected_host().is_some());
+        assert!(panel.selected_ssh_host().is_some());
     }
 
     #[test]
     fn navigate_to_manual() {
-        let mut panel = ConnectionPanel::new(sample_hosts());
+        let mut panel = ConnectionPanel::new(sample_hosts(), vec![]);
         panel.move_down(); // host 1
         panel.move_down(); // manual
         assert!(panel.is_manual_selected());
-        assert!(panel.selected_host().is_none());
+        assert!(panel.selected_ssh_host().is_none());
     }
 
     #[test]
     fn filter_hosts() {
-        let mut panel = ConnectionPanel::new(sample_hosts());
+        let mut panel = ConnectionPanel::new(sample_hosts(), vec![]);
         panel.set_filter("prod");
-        assert_eq!(panel.filtered.len(), 1);
+        // Should have 1 filtered host + Manual
+        assert_eq!(panel.filtered.len(), 2);
     }
 
     #[test]
     fn empty_hosts() {
-        let panel = ConnectionPanel::new(vec![]);
+        let panel = ConnectionPanel::new(vec![], vec![]);
         assert!(panel.is_manual_selected());
+    }
+
+    #[test]
+    fn switch_protocol() {
+        let mut panel = ConnectionPanel::new(sample_hosts(), vec![]);
+        assert_eq!(panel.selected_protocol, Protocol::Ssh);
+
+        panel.select_protocol(Protocol::Ftp);
+        assert_eq!(panel.selected_protocol, Protocol::Ftp);
+        // FTP tab with no saved connections: only Manual entry
+        assert_eq!(panel.entries.len(), 1);
+        assert!(panel.is_manual_selected());
+    }
+
+    #[test]
+    fn saved_connections_shown() {
+        let saved = vec![SavedConnection {
+            name: "My FTP".to_string(),
+            protocol: "ftp".to_string(),
+            host: "ftp.example.com".to_string(),
+            user: "admin".to_string(),
+            port: 21,
+            auth_method: "password".to_string(),
+            identity_file: None,
+            password: None,
+        }];
+        let mut panel = ConnectionPanel::new(vec![], saved);
+        panel.select_protocol(Protocol::Ftp);
+        // 1 saved FTP + Manual
+        assert_eq!(panel.entries.len(), 2);
+        assert!(panel.selected_saved().is_some());
     }
 }

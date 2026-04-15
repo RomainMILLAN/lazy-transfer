@@ -35,6 +35,7 @@ pub struct KeyMap {
     pub bottom: KeyBinding,
     pub toggle_theme: KeyBinding,
     pub toggle_hidden: KeyBinding,
+    pub sort: KeyBinding,
 }
 
 fn key(code: KeyCode) -> KeyEvent {
@@ -140,6 +141,11 @@ pub fn default_key_map() -> KeyMap {
             keys: vec![key(KeyCode::Char('.'))],
             help_key: ".".to_string(),
             help_desc: "toggle hidden files".to_string(),
+        },
+        sort: KeyBinding {
+            keys: vec![key(KeyCode::Char('s'))],
+            help_key: "s".to_string(),
+            help_desc: "sort".to_string(),
         },
     }
 }

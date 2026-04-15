@@ -34,6 +34,7 @@ use super::components::statusbar::{browser_hints, connection_hints};
 
 enum BgMsg {
     ConnectionSuccess { home_dir: String },
+    ConnectionReady { backend: Arc<dyn RemoteBackend>, home_dir: String },
     ConnectionError(String),
     RemoteFilesLoaded(Vec<FileEntry>),
     RemoteFilesError(String),
@@ -68,6 +69,9 @@ enum InputMode {
     ManualPort,
     ManualAuthChoice,
     ManualKeyPath,
+    ManualPassword,
+    SaveConnectionName,
+    SortChoice,
 }
 
 /// Tracks what action triggered a confirm dialog.
@@ -76,6 +80,8 @@ enum PendingAction {
     DeleteRemote { path: String },
     OverwriteUpload { local_path: String, remote_path: String },
     OverwriteDownload { remote_path: String, local_path: String },
+    DeleteSavedConnection { index: usize },
+    SaveConnection,
 }
 
 pub struct App {
@@ -83,7 +89,7 @@ pub struct App {
     screen: AppScreen,
 
     // Domain
-    runner: Option<Arc<SshRunner>>,
+    runner: Option<Arc<dyn RemoteBackend>>,
     connection: Option<ConnectionConfig>,
     config: Config,
 
@@ -129,12 +135,15 @@ pub struct App {
     pending_host: String,
     pending_user: String,
     pending_port: String,
+    pending_password: Option<String>,
+    is_manual_connect: bool,
 
     // CLI direct connect
     cli_host: Option<String>,
     cli_user: Option<String>,
     cli_port: u16,
     cli_identity: Option<String>,
+    cli_protocol: Protocol,
 }
 
 impl App {
@@ -144,6 +153,7 @@ impl App {
         cli_user: Option<String>,
         cli_port: u16,
         cli_identity: Option<String>,
+        cli_protocol: Protocol,
     ) -> Self {
         let (bg_tx, bg_rx) = mpsc::channel();
         let ssh_hosts = parse_ssh_config();
@@ -156,7 +166,10 @@ impl App {
             connection: None,
             config,
             layout: Layout::default(),
-            connection_panel: super::panels::ConnectionPanel::new(ssh_hosts),
+            connection_panel: super::panels::ConnectionPanel::new(
+                ssh_hosts,
+                crate::transfer::connections::load().entries,
+            ),
             local_files,
             remote_files: super::panels::RemoteFilesPanel::new(),
             transfers: super::panels::TransfersPanel::new(),
@@ -180,10 +193,13 @@ impl App {
             pending_host: String::new(),
             pending_user: String::new(),
             pending_port: String::new(),
+            pending_password: None,
+            is_manual_connect: false,
             cli_host,
             cli_user,
             cli_port,
             cli_identity,
+            cli_protocol,
         }
     }
 
@@ -289,7 +305,7 @@ impl App {
         let panel_y = 2;
 
         let panel_area = Rect::new(panel_x, panel_y, panel_w, panel_h);
-        self.connection_panel.render(panel_area, buf, self.connecting);
+        self.connection_panel.render(panel_area, buf, self.connecting, self.filtering);
 
         // Info message
         if let Some(ref msg) = self.info_msg {
@@ -360,7 +376,7 @@ impl App {
         }
 
         if let Some(ref conn) = self.connection {
-            let label = format!(" Connection: {} via SSH ", conn.label);
+            let label = format!(" Connection: {} via {} ", conn.label, conn.protocol.label());
             let style = Style::default()
                 .fg(theme::color_primary())
                 .bg(bar_bg)
@@ -604,6 +620,62 @@ impl App {
     fn handle_connection_key(&mut self, key: KeyEvent) {
         let km = default_key_map();
 
+        // Tab switching: 1=SSH, 2=SFTP, 3=FTP
+        if let crossterm::event::KeyCode::Char('1') = key.code {
+            self.connection_panel.select_protocol(Protocol::Ssh);
+            return;
+        }
+        if let crossterm::event::KeyCode::Char('2') = key.code {
+            self.connection_panel.select_protocol(Protocol::Sftp);
+            return;
+        }
+        if let crossterm::event::KeyCode::Char('3') = key.code {
+            self.connection_panel.select_protocol(Protocol::Ftp);
+            return;
+        }
+
+        // Delete saved connection with 'x'
+        if let crossterm::event::KeyCode::Char('x') = key.code {
+            if self.connection_panel.selected_saved_index().is_some() {
+                if let Some(saved) = self.connection_panel.selected_saved() {
+                    let name = saved.name.clone();
+                    self.confirm.show(&format!("Remove saved connection '{}'?", name));
+                    // Store the index for deletion after confirmation
+                    if let Some(idx) = self.connection_panel.selected_saved_index() {
+                        self.pending_action = Some(PendingAction::DeleteSavedConnection { index: idx });
+                    }
+                }
+            }
+            return;
+        }
+
+        // Edit saved connection with 'e'
+        if let crossterm::event::KeyCode::Char('e') = key.code {
+            if let Some(saved) = self.connection_panel.selected_saved().cloned() {
+                // Pre-fill the manual connection flow with saved values
+                self.pending_host = saved.host.clone();
+                self.pending_user = saved.user.clone();
+                self.pending_port = saved.port.to_string();
+                self.pending_password = saved.decoded_password();
+
+                // Delete the old saved connection
+                if let Some(idx) = self.connection_panel.selected_saved_index() {
+                    let mut conns = crate::transfer::connections::load();
+                    if idx < conns.entries.len() {
+                        conns.entries.remove(idx);
+                        let _ = crate::transfer::connections::save(&conns);
+                        self.connection_panel.reload_saved();
+                    }
+                }
+
+                // Start the manual flow at the host step, pre-filled
+                self.is_manual_connect = true;
+                self.input_mode = InputMode::ManualHost;
+                self.input.show_with_value("Host", "hostname or IP...", &saved.host);
+            }
+            return;
+        }
+
         if km.up.matches(&key) {
             self.connection_panel.move_up();
         } else if km.down.matches(&key) {
@@ -611,9 +683,14 @@ impl App {
         } else if km.enter.matches(&key) {
             if self.connection_panel.is_manual_selected() {
                 self.start_manual_connection();
-            } else if let Some(host) = self.connection_panel.selected_host().cloned() {
+            } else if let Some(host) = self.connection_panel.selected_ssh_host().cloned() {
                 let conn = ConnectionConfig::from_ssh_host(&host);
                 self.connect(conn);
+            } else if let Some(saved) = self.connection_panel.selected_saved().cloned() {
+                self.is_manual_connect = false;
+                let conn = saved.to_connection_config();
+                let password = saved.decoded_password();
+                self.connect_saved(conn, password);
             }
         } else if km.search.matches(&key) {
             self.filtering = true;
@@ -665,6 +742,19 @@ impl App {
         if km.toggle_hidden.matches(&key) {
             self.local_files.toggle_hidden();
             self.remote_files.toggle_hidden();
+            return;
+        }
+
+        if km.sort.matches(&key) {
+            self.choice.show(
+                "Sort by:",
+                vec![
+                    Choice { key: 'n', label: "Name".to_string() },
+                    Choice { key: 's', label: "Size".to_string() },
+                    Choice { key: 't', label: "Date".to_string() },
+                ],
+            );
+            self.input_mode = InputMode::SortChoice;
             return;
         }
 
@@ -748,17 +838,40 @@ impl App {
             InputMode::ManualHost => {
                 self.pending_host = value;
                 self.input_mode = InputMode::ManualUser;
-                self.input.show("User", "SSH username...");
+                // Pre-fill user if editing a saved connection
+                let user = &self.pending_user;
+                if user.is_empty() {
+                    self.input.show("User", "username...");
+                } else {
+                    self.input.show_with_value("User", "username...", user);
+                }
                 return;
             }
             InputMode::ManualUser => {
                 self.pending_user = value;
                 self.input_mode = InputMode::ManualPort;
-                self.input.show_with_value("Port", "22", "22");
+                // Pre-fill port from pending (edit) or default
+                let port = if self.pending_port.is_empty() {
+                    self.connection_panel.selected_protocol.default_port().to_string()
+                } else {
+                    self.pending_port.clone()
+                };
+                self.input.show_with_value("Port", &port, &port);
                 return;
             }
             InputMode::ManualPort => {
                 self.pending_port = value;
+                // FTP: skip auth choice, go directly to password
+                if self.connection_panel.selected_protocol == Protocol::Ftp {
+                    self.input_mode = InputMode::ManualPassword;
+                    let hint = if self.pending_password.is_some() {
+                        "leave empty to keep current password"
+                    } else {
+                        "FTP password..."
+                    };
+                    self.input.show_password("Password", hint);
+                    return;
+                }
                 self.input_mode = InputMode::ManualAuthChoice;
                 self.choice.show(
                     "Authentication method:",
@@ -781,7 +894,9 @@ impl App {
             }
             InputMode::ManualKeyPath => {
                 let port = self.pending_port.parse().unwrap_or(22);
+                let protocol = self.connection_panel.selected_protocol.clone();
                 let conn = ConnectionConfig {
+                    protocol,
                     host: self.pending_host.clone(),
                     user: self.pending_user.clone(),
                     port,
@@ -789,6 +904,49 @@ impl App {
                     label: format!("{}@{}:{}", self.pending_user, self.pending_host, port),
                 };
                 self.connect(conn);
+            }
+            InputMode::ManualPassword => {
+                // If empty and we have a saved password, reuse it
+                let password = if value.is_empty() {
+                    self.pending_password.clone().unwrap_or_default()
+                } else {
+                    value
+                };
+                self.pending_password = Some(password.clone());
+                let port = self.pending_port.parse().unwrap_or(21);
+                let protocol = self.connection_panel.selected_protocol.clone();
+                let conn = ConnectionConfig {
+                    protocol: protocol.clone(),
+                    host: self.pending_host.clone(),
+                    user: self.pending_user.clone(),
+                    port,
+                    auth: AuthMethod::Password,
+                    label: format!("{}@{}:{}", self.pending_user, self.pending_host, port),
+                };
+                match protocol {
+                    Protocol::Ftp => self.connect_ftp(conn, password),
+                    Protocol::Sftp => self.connect_sftp(conn, Some(password)),
+                    Protocol::Ssh => {
+                        self.pending_password_connect = Some(conn);
+                    }
+                }
+            }
+            InputMode::SaveConnectionName => {
+                if let Some(ref conn) = self.connection {
+                    let pw = self.pending_password.as_deref();
+                    let saved = crate::transfer::connections::SavedConnection::from_connection_config(
+                        &value,
+                        conn,
+                        pw,
+                    );
+                    let mut conns = crate::transfer::connections::load();
+                    conns.entries.push(saved);
+                    if let Err(e) = crate::transfer::connections::save(&conns) {
+                        self.info_msg = Some(format!("Save error: {}", e));
+                    } else {
+                        self.connection_panel.reload_saved();
+                    }
+                }
             }
             _ => {}
         }
@@ -804,7 +962,9 @@ impl App {
                 }
                 'a' => {
                     let port = self.pending_port.parse().unwrap_or(22);
+                    let protocol = self.connection_panel.selected_protocol.clone();
                     let conn = ConnectionConfig {
+                        protocol,
                         host: self.pending_host.clone(),
                         user: self.pending_user.clone(),
                         port,
@@ -815,8 +975,20 @@ impl App {
                     self.connect(conn);
                 }
                 'p' => {
+                    // For SFTP, ask for password inline
+                    if self.connection_panel.selected_protocol == Protocol::Sftp {
+                        self.input_mode = InputMode::ManualPassword;
+                        let hint = if self.pending_password.is_some() {
+                            "leave empty to keep current password"
+                        } else {
+                            "SSH password..."
+                        };
+                        self.input.show_password("Password", hint);
+                        return;
+                    }
                     let port = self.pending_port.parse().unwrap_or(22);
                     let conn = ConnectionConfig {
+                        protocol: Protocol::Ssh,
                         host: self.pending_host.clone(),
                         user: self.pending_user.clone(),
                         port,
@@ -830,12 +1002,31 @@ impl App {
                     self.input_mode = InputMode::None;
                 }
             }
+        } else if self.input_mode == InputMode::SortChoice {
+            let col = match choice {
+                'n' => Some(SortColumn::Name),
+                's' => Some(SortColumn::Size),
+                't' => Some(SortColumn::Date),
+                _ => None,
+            };
+            if let Some(col) = col {
+                match self.active_pane {
+                    ActivePane::Local => self.local_files.cycle_sort(col),
+                    ActivePane::Remote => self.remote_files.cycle_sort(col),
+                }
+            }
+            self.input_mode = InputMode::None;
         }
     }
 
     // --- Connection ---
 
     fn start_manual_connection(&mut self) {
+        self.pending_host.clear();
+        self.pending_user.clear();
+        self.pending_port.clear();
+        self.pending_password = None;
+        self.is_manual_connect = true;
         self.input_mode = InputMode::ManualHost;
         self.input.show("Host", "hostname or IP...");
     }
@@ -845,6 +1036,7 @@ impl App {
             let user = self.cli_user.take().unwrap_or_default();
             let port = self.cli_port;
             let identity = self.cli_identity.take();
+            let protocol = self.cli_protocol.clone();
             let auth = match identity {
                 Some(path) => AuthMethod::Key(path),
                 None => AuthMethod::Agent,
@@ -855,6 +1047,7 @@ impl App {
                 format!("{}@{}:{}", user, host, port)
             };
             let conn = ConnectionConfig {
+                protocol,
                 host,
                 user,
                 port,
@@ -866,16 +1059,48 @@ impl App {
     }
 
     fn connect(&mut self, conn: ConnectionConfig) {
-        // Password auth requires suspending the TUI for interactive prompt
-        if matches!(conn.auth, AuthMethod::Password) {
-            self.pending_password_connect = Some(conn);
-            return;
+        match conn.protocol {
+            Protocol::Ssh => {
+                if matches!(conn.auth, AuthMethod::Password) {
+                    self.pending_password_connect = Some(conn);
+                } else {
+                    self.connect_ssh(conn);
+                }
+            }
+            Protocol::Sftp => {
+                self.connect_sftp(conn, None);
+            }
+            Protocol::Ftp => {
+                // FTP needs a password — this path is for manual connections
+                // where password is not yet known. For saved connections, use connect_saved.
+                self.info_msg = Some("FTP requires a password. Use manual connection or saved connections.".to_string());
+            }
         }
-
-        self.connect_with_executor(conn);
     }
 
-    fn connect_with_executor(&mut self, conn: ConnectionConfig) {
+    fn connect_saved(&mut self, conn: ConnectionConfig, password: Option<String>) {
+        match conn.protocol {
+            Protocol::Ssh => {
+                if matches!(conn.auth, AuthMethod::Password) {
+                    self.pending_password_connect = Some(conn);
+                } else {
+                    self.connect_ssh(conn);
+                }
+            }
+            Protocol::Sftp => {
+                self.connect_sftp(conn, password);
+            }
+            Protocol::Ftp => {
+                if let Some(pw) = password {
+                    self.connect_ftp(conn, pw);
+                } else {
+                    self.info_msg = Some("FTP requires a password.".to_string());
+                }
+            }
+        }
+    }
+
+    fn connect_ssh(&mut self, conn: ConnectionConfig) {
         self.connecting = true;
         self.info_msg = None;
         self.spinner.start("Connecting...");
@@ -895,7 +1120,7 @@ impl App {
             conn.port,
             identity,
         ));
-        let runner = Arc::new(SshRunner::new(exec));
+        let runner: Arc<dyn RemoteBackend> = Arc::new(SshRunner::new(exec));
 
         self.connection = Some(conn);
         self.runner = Some(Arc::clone(&runner));
@@ -908,6 +1133,81 @@ impl App {
             Err(e) => {
                 let _ = tx.send(BgMsg::ConnectionError(e));
             }
+        });
+    }
+
+    fn connect_sftp(&mut self, conn: ConnectionConfig, password: Option<String>) {
+        self.connecting = true;
+        self.info_msg = None;
+        self.spinner.start("Connecting via SFTP...");
+
+        let host = conn.host.clone();
+        let port = conn.port;
+        let user = conn.user.clone();
+        let auth = conn.auth.clone();
+
+        log::info!("connect_sftp: {}@{}:{} (password={})", user, host, port, password.is_some());
+
+        self.connection = Some(conn);
+        let tx = self.bg_tx.clone();
+
+        thread::spawn(move || {
+            log::info!("connect_sftp thread: starting SftpBackend::connect");
+            let result = if let Some(pw) = password {
+                crate::transfer::sftp_backend::SftpBackend::connect_with_password(&host, port, &user, &pw)
+            } else {
+                crate::transfer::sftp_backend::SftpBackend::connect(&host, port, &user, &auth)
+            };
+
+            match result {
+                Ok(backend) => {
+                    let home = backend.home_dir().unwrap_or_else(|_| "/".to_string());
+                    log::info!("connect_sftp thread: success, home={}", home);
+                    let _ = tx.send(BgMsg::ConnectionReady {
+                        backend: std::sync::Arc::new(backend),
+                        home_dir: home,
+                    });
+                }
+                Err(e) => {
+                    log::error!("connect_sftp thread: failed: {}", e);
+                    let _ = tx.send(BgMsg::ConnectionError(e));
+                }
+            }
+            log::info!("connect_sftp thread: done");
+        });
+    }
+
+    fn connect_ftp(&mut self, conn: ConnectionConfig, password: String) {
+        self.connecting = true;
+        self.info_msg = None;
+        self.spinner.start("Connecting via FTP...");
+
+        let host = conn.host.clone();
+        let port = conn.port;
+        let user = conn.user.clone();
+
+        log::info!("connect_ftp: {}@{}:{}", user, host, port);
+
+        self.connection = Some(conn);
+        let tx = self.bg_tx.clone();
+
+        thread::spawn(move || {
+            log::info!("connect_ftp thread: starting FtpBackend::connect");
+            match crate::transfer::ftp_backend::FtpBackend::connect(&host, port, &user, &password) {
+                Ok(backend) => {
+                    let home = backend.home_dir().unwrap_or_else(|_| "/".to_string());
+                    log::info!("connect_ftp thread: success, home={}", home);
+                    let _ = tx.send(BgMsg::ConnectionReady {
+                        backend: std::sync::Arc::new(backend),
+                        home_dir: home,
+                    });
+                }
+                Err(e) => {
+                    log::error!("connect_ftp thread: failed: {}", e);
+                    let _ = tx.send(BgMsg::ConnectionError(e));
+                }
+            }
+            log::info!("connect_ftp thread: done");
         });
     }
 
@@ -974,7 +1274,7 @@ impl App {
                 };
 
                 // Now connect with the established ControlMaster session
-                self.connect_with_executor(conn);
+                self.connect_ssh(conn);
                 // Directly send success since ControlMaster is already up
                 let _ = self.bg_tx.send(BgMsg::ConnectionSuccess { home_dir });
             }
@@ -1030,6 +1330,30 @@ impl App {
                     self.remote_files.set_dir(&home_dir);
                     self.spawn_load_remote(&home_dir);
                 }
+                BgMsg::ConnectionReady { backend, home_dir } => {
+                    self.connecting = false;
+                    self.spinner.stop();
+                    self.runner = Some(backend);
+                    self.screen = AppScreen::FileBrowser;
+
+                    let (w, h) = crossterm::terminal::size().unwrap_or((120, 40));
+                    self.layout = compute_layout(w, h, false);
+                    self.status_bar.set_hints(browser_hints());
+
+                    if let Some(ref conn) = self.connection {
+                        self.status_bar.set_connection_info(&conn.label);
+                    }
+
+                    self.remote_files.set_dir(&home_dir);
+                    self.spawn_load_remote(&home_dir);
+
+                    // Propose to save only for manual connections (not already saved ones)
+                    if self.is_manual_connect {
+                        self.is_manual_connect = false;
+                        self.confirm.show("Save this connection for later?");
+                        self.pending_action = Some(PendingAction::SaveConnection);
+                    }
+                }
                 BgMsg::ConnectionError(e) => {
                     self.connecting = false;
                     self.spinner.stop();
@@ -1053,9 +1377,26 @@ impl App {
                     self.transfers.update_progress(job_id, percent, speed);
                 }
                 BgMsg::TransferComplete { job_id } => {
+                    // Determine direction before marking complete
+                    let direction = self.transfers.jobs.iter()
+                        .find(|j| j.id == job_id)
+                        .map(|j| j.direction.clone());
                     self.transfers.complete_job(job_id);
-                    // Refresh the target pane
-                    self.refresh_current_panel();
+                    // Refresh the destination pane
+                    match direction {
+                        Some(TransferDirection::Upload) => {
+                            // Uploaded to remote -> refresh remote
+                            let dir = self.remote_files.current_dir.clone();
+                            if !dir.is_empty() {
+                                self.spawn_load_remote(&dir);
+                            }
+                        }
+                        Some(TransferDirection::Download) => {
+                            // Downloaded to local -> refresh local
+                            self.local_files.load_dir();
+                        }
+                        None => {}
+                    }
                 }
                 BgMsg::TransferError { job_id, error } => {
                     self.transfers.fail_job(job_id, error.clone());
@@ -1283,7 +1624,7 @@ impl App {
         job_id: usize,
         tx: mpsc::Sender<BgMsg>,
     ) {
-        let progress_re = regex::Regex::new(r"(\d+)%\s+(\S+)\s+(\S+/s)").ok();
+        let progress_re = regex::Regex::new(r"(\d+)%(?:\s+\S+\s+(\S+/s))?").ok();
 
         while let Ok(line) = handle.rx.recv() {
             if line.done {
@@ -1302,7 +1643,7 @@ impl App {
             if let Some(ref re) = progress_re {
                 if let Some(caps) = re.captures(&line.text) {
                     if let Ok(pct) = caps[1].parse::<u8>() {
-                        let speed = caps.get(3).map_or("", |m| m.as_str()).to_string();
+                        let speed = caps.get(2).map_or("", |m| m.as_str()).to_string();
                         let _ = tx.send(BgMsg::TransferProgress {
                             job_id,
                             percent: pct,
@@ -1422,6 +1763,20 @@ impl App {
                         self.do_download_dir(&remote_path, &local_path, &name);
                     } else {
                         self.do_download(&remote_path, &local_path, &name, 0);
+                    }
+                }
+                PendingAction::SaveConnection => {
+                    self.input_mode = InputMode::SaveConnectionName;
+                    self.input.show("Connection Name", "name for this connection...");
+                }
+                PendingAction::DeleteSavedConnection { index } => {
+                    let mut conns = crate::transfer::connections::load();
+                    if index < conns.entries.len() {
+                        conns.entries.remove(index);
+                        if let Err(e) = crate::transfer::connections::save(&conns) {
+                            self.info_msg = Some(format!("Save error: {}", e));
+                        }
+                        self.connection_panel.reload_saved();
                     }
                 }
             }

@@ -8,7 +8,7 @@ use ratatui::widgets::{Block, Borders, Widget};
 use std::fs;
 use std::path::Path;
 
-use crate::transfer::types::FileEntry;
+use crate::transfer::types::{FileEntry, SortColumn, SortOrder};
 use crate::ui::style::theme;
 use crate::ui::text::format_size;
 
@@ -20,6 +20,8 @@ pub struct LocalFilesPanel {
     pub filter: String,
     pub cursor: usize,
     pub show_hidden: bool,
+    pub sort_column: SortColumn,
+    pub sort_order: SortOrder,
 }
 
 impl LocalFilesPanel {
@@ -31,6 +33,8 @@ impl LocalFilesPanel {
             filter: String::new(),
             cursor: 0,
             show_hidden: false,
+            sort_column: SortColumn::Name,
+            sort_order: SortOrder::Asc,
         };
         panel.load_dir();
         panel
@@ -88,10 +92,6 @@ impl LocalFilesPanel {
                 }
             }
 
-            // Sort alphabetically: dirs first, then files
-            dirs.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
-            files.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
-
             self.files.extend(dirs);
             self.files.extend(files);
         }
@@ -113,6 +113,17 @@ impl LocalFilesPanel {
 
     pub fn toggle_hidden(&mut self) {
         self.show_hidden = !self.show_hidden;
+        self.rebuild_filter();
+    }
+
+    /// Cycle sort: same column toggles ASC/DESC, different column switches to it ASC.
+    pub fn cycle_sort(&mut self, column: SortColumn) {
+        if self.sort_column == column {
+            self.sort_order = self.sort_order.toggle();
+        } else {
+            self.sort_column = column;
+            self.sort_order = SortOrder::Asc;
+        }
         self.rebuild_filter();
     }
 
@@ -154,6 +165,32 @@ impl LocalFilesPanel {
             scored.sort_by(|a, b| b.1.cmp(&a.1));
             self.filtered = scored.into_iter().map(|(i, _)| i).collect();
         }
+
+        // Apply column sort (dirs first, ".." always at top)
+        let files = &self.files;
+        let col = self.sort_column;
+        let ord = self.sort_order;
+        self.filtered.sort_by(|&a, &b| {
+            let fa = &files[a];
+            let fb = &files[b];
+            // ".." always first
+            if fa.name == ".." { return std::cmp::Ordering::Less; }
+            if fb.name == ".." { return std::cmp::Ordering::Greater; }
+            // Dirs before files
+            if fa.is_dir != fb.is_dir {
+                return if fa.is_dir { std::cmp::Ordering::Less } else { std::cmp::Ordering::Greater };
+            }
+            // Sort within same type
+            let cmp = match col {
+                SortColumn::Name => fa.name.to_lowercase().cmp(&fb.name.to_lowercase()),
+                SortColumn::Size => fa.size.cmp(&fb.size),
+                SortColumn::Date => fa.modified.cmp(&fb.modified),
+            };
+            match ord {
+                SortOrder::Asc => cmp,
+                SortOrder::Desc => cmp.reverse(),
+            }
+        });
 
         let count = self.filtered.len();
         if self.cursor >= count && count > 0 {
@@ -243,10 +280,11 @@ impl LocalFilesPanel {
             format!("{}/{}", self.filtered.len(), self.files.len())
         };
 
+        let sort_text = format!(" {}{}", self.sort_column.label(), self.sort_order.arrow());
         let block = Block::default()
             .title(format!(
-                " Local ({}) [{}]{} ",
-                self.current_dir, count_text, filter_text
+                " Local ({}) [{}]{}{} ",
+                self.current_dir, count_text, sort_text, filter_text
             ))
             .borders(Borders::ALL)
             .border_style(Style::default().fg(border_color));
@@ -295,8 +333,11 @@ impl LocalFilesPanel {
             } else {
                 format_size(entry.size)
             };
+            let date_str = &entry.modified;
 
-            let name_w = inner.width.saturating_sub(22) as usize;
+            // Layout: " d name          8.0 KB  2024-01-15 10:30"
+            // Reserve: 3 (icon) + 10 (size) + 18 (date) + 2 (gaps) = 33
+            let name_w = inner.width.saturating_sub(33) as usize;
             let name_display = if entry.name.len() > name_w {
                 format!("{:.width$}", entry.name, width = name_w)
             } else {
@@ -323,10 +364,17 @@ impl LocalFilesPanel {
                 style
             };
 
+            let date_style = if is_selected {
+                style
+            } else {
+                Style::default().fg(theme::color_muted())
+            };
+
             let line = Line::from(vec![
                 Span::styled(format!(" {} ", icon), icon_style),
                 Span::styled(format!("{:<width$}", name_display, width = name_w), style),
                 Span::styled(format!(" {:>8}", size_str), style),
+                Span::styled(format!("  {:>16}", date_str), date_style),
             ]);
             buf.set_line(inner.x, y, &line, inner.width);
         }

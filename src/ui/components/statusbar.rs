@@ -99,12 +99,24 @@ impl StatusBar {
 pub fn connection_hints() -> Vec<Hint> {
     vec![
         Hint {
+            key: "1/2/3".to_string(),
+            desc: "SSH/SFTP/FTP".to_string(),
+        },
+        Hint {
             key: "j/k".to_string(),
             desc: "navigate".to_string(),
         },
         Hint {
             key: "enter".to_string(),
             desc: "connect".to_string(),
+        },
+        Hint {
+            key: "e".to_string(),
+            desc: "edit saved".to_string(),
+        },
+        Hint {
+            key: "x".to_string(),
+            desc: "remove saved".to_string(),
         },
         Hint {
             key: "/".to_string(),
@@ -147,6 +159,10 @@ pub fn browser_hints() -> Vec<Hint> {
         Hint {
             key: "r".to_string(),
             desc: "rename".to_string(),
+        },
+        Hint {
+            key: "s".to_string(),
+            desc: "sort".to_string(),
         },
         Hint {
             key: "R".to_string(),

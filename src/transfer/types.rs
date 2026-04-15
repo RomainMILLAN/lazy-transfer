@@ -1,4 +1,35 @@
-/// Authentication method for SSH connections.
+/// Protocol type for remote connections.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Protocol {
+    Ssh,
+    Sftp,
+    Ftp,
+}
+
+impl Default for Protocol {
+    fn default() -> Self {
+        Protocol::Ssh
+    }
+}
+
+impl Protocol {
+    pub fn default_port(&self) -> u16 {
+        match self {
+            Protocol::Ssh | Protocol::Sftp => 22,
+            Protocol::Ftp => 21,
+        }
+    }
+
+    pub fn label(&self) -> &'static str {
+        match self {
+            Protocol::Ssh => "SSH",
+            Protocol::Sftp => "SFTP",
+            Protocol::Ftp => "FTP",
+        }
+    }
+}
+
+/// Authentication method for connections.
 #[derive(Debug, Clone)]
 pub enum AuthMethod {
     /// Path to an identity file (SSH key).
@@ -22,6 +53,7 @@ pub struct SshHost {
 /// Connection configuration (either from ssh config or manual).
 #[derive(Debug, Clone)]
 pub struct ConnectionConfig {
+    pub protocol: Protocol,
     pub host: String,
     pub user: String,
     pub port: u16,
@@ -42,11 +74,61 @@ impl ConnectionConfig {
             format!("{}@{}:{}", host.user, host.hostname, host.port)
         };
         ConnectionConfig {
+            protocol: Protocol::Ssh,
             host: host.hostname.clone(),
             user: host.user.clone(),
             port: host.port,
             auth,
             label,
+        }
+    }
+}
+
+/// Column to sort file entries by.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SortColumn {
+    Name,
+    Size,
+    Date,
+}
+
+/// Sort direction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SortOrder {
+    Asc,
+    Desc,
+}
+
+impl SortColumn {
+    pub fn next(self) -> Self {
+        match self {
+            SortColumn::Name => SortColumn::Size,
+            SortColumn::Size => SortColumn::Date,
+            SortColumn::Date => SortColumn::Name,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            SortColumn::Name => "name",
+            SortColumn::Size => "size",
+            SortColumn::Date => "date",
+        }
+    }
+}
+
+impl SortOrder {
+    pub fn toggle(self) -> Self {
+        match self {
+            SortOrder::Asc => SortOrder::Desc,
+            SortOrder::Desc => SortOrder::Asc,
+        }
+    }
+
+    pub fn arrow(self) -> &'static str {
+        match self {
+            SortOrder::Asc => "↑",
+            SortOrder::Desc => "↓",
         }
     }
 }
