@@ -13,4 +13,8 @@ pub trait RemoteBackend: Send + Sync {
     fn test_connection(&self) -> Result<String, String>;
     fn upload(&self, local_path: &str, remote_path: &str) -> Result<StreamHandle, String>;
     fn download(&self, remote_path: &str, local_path: &str) -> Result<StreamHandle, String>;
+    /// Upload a directory: tar locally, scp the archive, extract remotely, cleanup.
+    fn upload_dir(&self, local_path: &str, remote_dest: &str) -> Result<StreamHandle, String>;
+    /// Download a directory: tar remotely, scp the archive, extract locally, cleanup.
+    fn download_dir(&self, remote_path: &str, local_dest: &str) -> Result<StreamHandle, String>;
 }

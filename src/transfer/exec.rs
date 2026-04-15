@@ -85,10 +85,20 @@ impl RealExecutor {
         }
     }
 
+    fn control_path(&self) -> String {
+        format!("/tmp/lt-ssh-{}@{}:{}", self.user, self.host, self.port)
+    }
+
     fn ssh_base_args(&self) -> Vec<String> {
         let mut args = vec![
             "-o".to_string(),
             "ConnectTimeout=10".to_string(),
+            "-o".to_string(),
+            format!("ControlPath={}", self.control_path()),
+            "-o".to_string(),
+            "ControlMaster=auto".to_string(),
+            "-o".to_string(),
+            "ControlPersist=600".to_string(),
             "-p".to_string(),
             self.port.to_string(),
         ];
@@ -101,6 +111,12 @@ impl RealExecutor {
 
     fn scp_base_args(&self) -> Vec<String> {
         let mut args = vec![
+            "-o".to_string(),
+            format!("ControlPath={}", self.control_path()),
+            "-o".to_string(),
+            "ControlMaster=auto".to_string(),
+            "-o".to_string(),
+            "ControlPersist=600".to_string(),
             "-P".to_string(),
             self.port.to_string(),
         ];

@@ -202,6 +202,10 @@ fn help_sections() -> Vec<HelpSection> {
                     key: "/".to_string(),
                     desc: "search / filter".to_string(),
                 },
+                Hint {
+                    key: ".".to_string(),
+                    desc: "toggle hidden files".to_string(),
+                },
             ],
         },
         HelpSection {

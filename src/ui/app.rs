@@ -115,6 +115,9 @@ pub struct App {
     loading_remote: bool,
     connecting: bool,
 
+    // Pending interactive operations (suspend TUI)
+    pending_password_connect: Option<ConnectionConfig>,
+
     // Background channel
     bg_rx: mpsc::Receiver<BgMsg>,
     bg_tx: mpsc::Sender<BgMsg>,
@@ -170,6 +173,7 @@ impl App {
             next_job_id: 1,
             loading_remote: false,
             connecting: false,
+            pending_password_connect: None,
             bg_rx,
             bg_tx,
             info_msg: None,
@@ -239,6 +243,11 @@ impl App {
                     }
                     _ => {}
                 }
+            }
+
+            // Handle pending password connection (suspend TUI)
+            if self.pending_password_connect.is_some() {
+                self.run_password_connect_interactive(&mut terminal)?;
             }
         }
 
@@ -653,6 +662,12 @@ impl App {
             return;
         }
 
+        if km.toggle_hidden.matches(&key) {
+            self.local_files.toggle_hidden();
+            self.remote_files.toggle_hidden();
+            return;
+        }
+
         if km.escape.matches(&key) {
             match self.active_pane {
                 ActivePane::Local => self.local_files.clear_filter(),
@@ -851,6 +866,16 @@ impl App {
     }
 
     fn connect(&mut self, conn: ConnectionConfig) {
+        // Password auth requires suspending the TUI for interactive prompt
+        if matches!(conn.auth, AuthMethod::Password) {
+            self.pending_password_connect = Some(conn);
+            return;
+        }
+
+        self.connect_with_executor(conn);
+    }
+
+    fn connect_with_executor(&mut self, conn: ConnectionConfig) {
         self.connecting = true;
         self.info_msg = None;
         self.spinner.start("Connecting...");
@@ -884,6 +909,84 @@ impl App {
                 let _ = tx.send(BgMsg::ConnectionError(e));
             }
         });
+    }
+
+    fn run_password_connect_interactive(
+        &mut self,
+        terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    ) -> io::Result<()> {
+        let conn = match self.pending_password_connect.take() {
+            Some(c) => c,
+            None => return Ok(()),
+        };
+
+        // Suspend TUI
+        disable_raw_mode()?;
+        execute!(
+            terminal.backend_mut(),
+            crossterm::event::DisableMouseCapture,
+            LeaveAlternateScreen
+        )?;
+
+        // Build SSH command to establish ControlMaster session
+        let target = if conn.user.is_empty() {
+            conn.host.clone()
+        } else {
+            format!("{}@{}", conn.user, conn.host)
+        };
+        let control_path = format!("/tmp/lt-ssh-{}@{}:{}", conn.user, conn.host, conn.port);
+
+        eprintln!("Connecting to {} (password auth)...", conn.label);
+        eprintln!("Type your password when prompted.\n");
+
+        let status = std::process::Command::new(&self.config.ssh_bin)
+            .args([
+                "-o", "ConnectTimeout=10",
+                "-o", &format!("ControlPath={}", control_path),
+                "-o", "ControlMaster=auto",
+                "-o", "ControlPersist=600",
+                "-p", &conn.port.to_string(),
+                &target,
+                "echo ok && echo $HOME",
+            ])
+            .stdin(std::process::Stdio::inherit())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::inherit())
+            .output();
+
+        // Resume TUI
+        enable_raw_mode()?;
+        execute!(
+            terminal.backend_mut(),
+            EnterAlternateScreen,
+            crossterm::event::EnableMouseCapture
+        )?;
+        terminal.clear()?;
+
+        match status {
+            Ok(output) if output.status.success() => {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                let lines: Vec<&str> = stdout.trim().lines().collect();
+                let home_dir = if lines.len() >= 2 && lines[0] == "ok" {
+                    lines[1].to_string()
+                } else {
+                    "/".to_string()
+                };
+
+                // Now connect with the established ControlMaster session
+                self.connect_with_executor(conn);
+                // Directly send success since ControlMaster is already up
+                let _ = self.bg_tx.send(BgMsg::ConnectionSuccess { home_dir });
+            }
+            Ok(_) => {
+                self.info_msg = Some("Connection failed: authentication error".to_string());
+            }
+            Err(e) => {
+                self.info_msg = Some(format!("Connection failed: {}", e));
+            }
+        }
+
+        Ok(())
     }
 
     fn spawn_load_remote(&mut self, path: &str) {
@@ -983,21 +1086,34 @@ impl App {
         match self.active_pane {
             ActivePane::Local => {
                 let entry = match self.local_files.selected() {
-                    Some(e) if e.name != ".." && !e.is_dir => e.clone(),
+                    Some(e) if e.name != ".." => e.clone(),
                     _ => return,
                 };
                 let local_path = format!("{}/{}", self.local_files.current_dir, entry.name);
-                let remote_dir = &self.remote_files.current_dir;
+                let remote_dir = self.remote_files.current_dir.clone();
                 let remote_path = if remote_dir.ends_with('/') {
                     format!("{}{}", remote_dir, entry.name)
                 } else {
                     format!("{}/{}", remote_dir, entry.name)
                 };
-                self.do_upload(&local_path, &remote_path, &entry.name, entry.size);
+
+                // Check if destination exists on remote (look in loaded file list)
+                let exists_on_remote = self.remote_files.files.iter().any(|f| f.name == entry.name);
+                if exists_on_remote {
+                    self.pending_action = Some(PendingAction::OverwriteUpload {
+                        local_path,
+                        remote_path: if entry.is_dir { remote_dir } else { remote_path },
+                    });
+                    self.confirm.show(&format!("'{}' already exists on remote. Overwrite?", entry.name));
+                } else if entry.is_dir {
+                    self.do_upload_dir(&local_path, &remote_dir, &entry.name);
+                } else {
+                    self.do_upload(&local_path, &remote_path, &entry.name, entry.size);
+                }
             }
             ActivePane::Remote => {
                 let entry = match self.remote_files.selected() {
-                    Some(e) if e.name != ".." && !e.is_dir => e.clone(),
+                    Some(e) if e.name != ".." => e.clone(),
                     _ => return,
                 };
                 let remote_path = if self.remote_files.current_dir.ends_with('/') {
@@ -1005,8 +1121,21 @@ impl App {
                 } else {
                     format!("{}/{}", self.remote_files.current_dir, entry.name)
                 };
-                let local_path = format!("{}/{}", self.local_files.current_dir, entry.name);
-                self.do_download(&remote_path, &local_path, &entry.name, entry.size);
+                let local_dest = self.local_files.current_dir.clone();
+                let local_path = format!("{}/{}", local_dest, entry.name);
+
+                // Check if destination exists locally
+                if std::path::Path::new(&local_path).exists() {
+                    self.pending_action = Some(PendingAction::OverwriteDownload {
+                        remote_path,
+                        local_path: if entry.is_dir { local_dest } else { local_path },
+                    });
+                    self.confirm.show(&format!("'{}' already exists locally. Overwrite?", entry.name));
+                } else if entry.is_dir {
+                    self.do_download_dir(&remote_path, &local_dest, &entry.name);
+                } else {
+                    self.do_download(&remote_path, &local_path, &entry.name, entry.size);
+                }
             }
         }
     }
@@ -1085,6 +1214,66 @@ impl App {
                     job_id,
                     error: e,
                 });
+            }
+        });
+    }
+
+    fn do_upload_dir(&mut self, local_path: &str, remote_dest: &str, dir_name: &str) {
+        let job_id = self.next_job_id;
+        self.next_job_id += 1;
+
+        self.transfers.jobs.push(TransferJob {
+            id: job_id,
+            source: local_path.to_string(),
+            destination: remote_dest.to_string(),
+            direction: TransferDirection::Upload,
+            file_name: format!("{}/", dir_name),
+            file_size: 0,
+            status: TransferStatus::Queued,
+        });
+
+        let runner = match &self.runner {
+            Some(r) => Arc::clone(r),
+            None => return,
+        };
+        let local = local_path.to_string();
+        let remote = remote_dest.to_string();
+        let tx = self.bg_tx.clone();
+
+        thread::spawn(move || match runner.upload_dir(&local, &remote) {
+            Ok(handle) => Self::monitor_transfer(handle, job_id, tx),
+            Err(e) => {
+                let _ = tx.send(BgMsg::TransferError { job_id, error: e });
+            }
+        });
+    }
+
+    fn do_download_dir(&mut self, remote_path: &str, local_dest: &str, dir_name: &str) {
+        let job_id = self.next_job_id;
+        self.next_job_id += 1;
+
+        self.transfers.jobs.push(TransferJob {
+            id: job_id,
+            source: remote_path.to_string(),
+            destination: local_dest.to_string(),
+            direction: TransferDirection::Download,
+            file_name: format!("{}/", dir_name),
+            file_size: 0,
+            status: TransferStatus::Queued,
+        });
+
+        let runner = match &self.runner {
+            Some(r) => Arc::clone(r),
+            None => return,
+        };
+        let remote = remote_path.to_string();
+        let local = local_dest.to_string();
+        let tx = self.bg_tx.clone();
+
+        thread::spawn(move || match runner.download_dir(&remote, &local) {
+            Ok(handle) => Self::monitor_transfer(handle, job_id, tx),
+            Err(e) => {
+                let _ = tx.send(BgMsg::TransferError { job_id, error: e });
             }
         });
     }
@@ -1211,18 +1400,29 @@ impl App {
                         .unwrap_or_default()
                         .to_string_lossy()
                         .to_string();
-                    self.do_upload(&local_path, &remote_path, &name, 0);
+                    if std::path::Path::new(&local_path).is_dir() {
+                        self.do_upload_dir(&local_path, &remote_path, &name);
+                    } else {
+                        self.do_upload(&local_path, &remote_path, &name, 0);
+                    }
                 }
                 PendingAction::OverwriteDownload {
                     remote_path,
                     local_path,
                 } => {
                     let name = remote_path
+                        .trim_end_matches('/')
                         .rsplit('/')
                         .next()
                         .unwrap_or(&remote_path)
                         .to_string();
-                    self.do_download(&remote_path, &local_path, &name, 0);
+                    // Check if remote is a dir by looking at the file list
+                    let is_dir = self.remote_files.files.iter().any(|f| f.name == name && f.is_dir);
+                    if is_dir {
+                        self.do_download_dir(&remote_path, &local_path, &name);
+                    } else {
+                        self.do_download(&remote_path, &local_path, &name, 0);
+                    }
                 }
             }
         }

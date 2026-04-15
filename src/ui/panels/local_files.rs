@@ -19,6 +19,7 @@ pub struct LocalFilesPanel {
     filtered: Vec<usize>,
     pub filter: String,
     pub cursor: usize,
+    pub show_hidden: bool,
 }
 
 impl LocalFilesPanel {
@@ -29,6 +30,7 @@ impl LocalFilesPanel {
             filtered: Vec::new(),
             filter: String::new(),
             cursor: 0,
+            show_hidden: false,
         };
         panel.load_dir();
         panel
@@ -109,6 +111,11 @@ impl LocalFilesPanel {
         self.set_filter("");
     }
 
+    pub fn toggle_hidden(&mut self) {
+        self.show_hidden = !self.show_hidden;
+        self.rebuild_filter();
+    }
+
     /// Append a character to the filter (inline fzf mode).
     pub fn filter_push(&mut self, c: char) {
         self.filter.push(c);
@@ -122,21 +129,28 @@ impl LocalFilesPanel {
     }
 
     fn rebuild_filter(&mut self) {
+        let hide_dot = !self.show_hidden;
         if self.filter.is_empty() {
-            self.filtered = (0..self.files.len()).collect();
+            self.filtered = self
+                .files
+                .iter()
+                .enumerate()
+                .filter(|(_, f)| !hide_dot || f.name == ".." || !f.name.starts_with('.'))
+                .map(|(i, _)| i)
+                .collect();
         } else {
             let matcher = SkimMatcherV2::default();
             let mut scored: Vec<(usize, i64)> = self
                 .files
                 .iter()
                 .enumerate()
+                .filter(|(_, f)| !hide_dot || f.name == ".." || !f.name.starts_with('.'))
                 .filter_map(|(i, f)| {
                     matcher
                         .fuzzy_match(&f.name, &self.filter)
                         .map(|score| (i, score))
                 })
                 .collect();
-            // Sort by score descending (best match first)
             scored.sort_by(|a, b| b.1.cmp(&a.1));
             self.filtered = scored.into_iter().map(|(i, _)| i).collect();
         }
