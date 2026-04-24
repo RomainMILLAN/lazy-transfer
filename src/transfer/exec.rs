@@ -160,7 +160,13 @@ impl RealExecutor {
 /// Replace characters that are problematic inside /tmp/ control socket paths.
 fn sanitize_control_key(s: &str) -> String {
     s.chars()
-        .map(|c| if c.is_alphanumeric() || c == '.' || c == '-' || c == '_' { c } else { '_' })
+        .map(|c| {
+            if c.is_alphanumeric() || c == '.' || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect()
 }
 

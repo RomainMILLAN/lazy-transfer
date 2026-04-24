@@ -135,7 +135,7 @@ impl ConnectionPanel {
                         .map(|score| (i, score))
                 })
                 .collect();
-            scored.sort_by(|a, b| b.1.cmp(&a.1));
+            scored.sort_by_key(|b| std::cmp::Reverse(b.1));
             self.filtered = scored.into_iter().map(|(i, _)| i).collect();
             // Always include Manual at the end
             let manual_idx = self.entries.len() - 1;

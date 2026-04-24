@@ -243,8 +243,8 @@ impl RemoteBackend for SftpBackend {
             }
         }
 
-        dirs.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
-        files.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+        dirs.sort_by_key(|a| a.name.to_lowercase());
+        files.sort_by_key(|a| a.name.to_lowercase());
         dirs.extend(files);
 
         log::debug!("sftp list_dir: {} entries", dirs.len());
@@ -329,8 +329,7 @@ impl RemoteBackend for SftpBackend {
                         .write_all(&buf[..n])
                         .map_err(|e| format!("write: {}", e))?;
                     sent += n as u64;
-                    if total_size > 0 {
-                        let pct = (sent * 100 / total_size) as u8;
+                    if let Some(pct) = (sent * 100).checked_div(total_size).map(|p| p as u8) {
                         if pct > last_pct {
                             last_pct = pct;
                             let _ = tx.send(StreamLine {
@@ -410,8 +409,7 @@ impl RemoteBackend for SftpBackend {
                         .write_all(&buf[..n])
                         .map_err(|e| format!("write: {}", e))?;
                     received += n as u64;
-                    if total_size > 0 {
-                        let pct = (received * 100 / total_size) as u8;
+                    if let Some(pct) = (received * 100).checked_div(total_size).map(|p| p as u8) {
                         if pct > last_pct {
                             last_pct = pct;
                             let _ = tx.send(StreamLine {
@@ -497,8 +495,7 @@ impl RemoteBackend for SftpBackend {
                             .map_err(|e| format!("copy {}: {}", remote, e))?;
                     }
 
-                    if total > 0 {
-                        let pct = ((i + 1) * 100 / total) as u8;
+                    if let Some(pct) = ((i + 1) * 100).checked_div(total).map(|p| p as u8) {
                         let _ = tx.send(StreamLine {
                             text: format!("{}%", pct),
                             err: None,

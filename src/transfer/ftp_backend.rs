@@ -179,8 +179,7 @@ impl RemoteBackend for FtpBackend {
                         .map_err(|e| format!("write: {}", e))?;
                     written += chunk.len() as u64;
                     let report_total = if size > 0 { size as u64 } else { total };
-                    if report_total > 0 {
-                        let pct = (written * 100 / report_total) as u8;
+                    if let Some(pct) = (written * 100).checked_div(report_total).map(|p| p as u8) {
                         if pct > last_pct {
                             last_pct = pct;
                             let _ = tx.send(StreamLine {
@@ -266,8 +265,7 @@ impl RemoteBackend for FtpBackend {
                             .map_err(|e| format!("put {}: {}", remote, e))?;
                     }
 
-                    if total > 0 {
-                        let pct = ((i + 1) * 100 / total) as u8;
+                    if let Some(pct) = ((i + 1) * 100).checked_div(total).map(|p| p as u8) {
                         let _ = tx.send(StreamLine {
                             text: format!("{}%", pct),
                             err: None,
@@ -367,8 +365,7 @@ impl Read for ProgressReader {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         let n = self.inner.read(buf)?;
         self.sent += n as u64;
-        if self.total > 0 {
-            let pct = (self.sent * 100 / self.total) as u8;
+        if let Some(pct) = (self.sent * 100).checked_div(self.total).map(|p| p as u8) {
             if pct > self.last_pct {
                 self.last_pct = pct;
                 let _ = self.tx.send(StreamLine {

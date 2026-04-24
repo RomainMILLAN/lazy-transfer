@@ -274,11 +274,8 @@ impl App {
             // Handle events
             if event::poll(Duration::from_millis(50))? {
                 match event::read()? {
-                    Event::Key(key) => {
-                        if self.handle_key(key) {
-                            break;
-                        }
-                    }
+                    Event::Key(key) if self.handle_key(key) => break,
+                    Event::Key(_) => {}
                     Event::Mouse(mouse) => self.handle_mouse(mouse),
                     Event::Resize(w, h) => {
                         self.layout = match self.screen {
@@ -872,14 +869,11 @@ impl App {
                 ActivePane::Local => self.local_files.move_down(),
                 ActivePane::Remote => self.remote_files.move_down(),
             },
-            MouseEventKind::Down(MouseButton::Left) => {
-                if self.screen == AppScreen::FileBrowser {
-                    // Click on left half = Local, right half = Remote
-                    if mouse.column < self.layout.left_width {
-                        self.active_pane = ActivePane::Local;
-                    } else {
-                        self.active_pane = ActivePane::Remote;
-                    }
+            MouseEventKind::Down(MouseButton::Left) if self.screen == AppScreen::FileBrowser => {
+                if mouse.column < self.layout.left_width {
+                    self.active_pane = ActivePane::Local;
+                } else {
+                    self.active_pane = ActivePane::Remote;
                 }
             }
             _ => {}
@@ -1331,8 +1325,7 @@ impl App {
             } else {
                 format!("{}@{}", conn.user, conn.host)
             };
-            let control_path =
-                format!("/tmp/lt-ssh-{}@{}:{}", conn.user, conn.host, conn.port);
+            let control_path = format!("/tmp/lt-ssh-{}@{}:{}", conn.user, conn.host, conn.port);
             (target, control_path, true)
         };
 
