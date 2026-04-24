@@ -25,6 +25,7 @@ pub struct KeyMap {
     pub back: KeyBinding,
     pub switch_pane: KeyBinding,
     pub copy_file: KeyBinding,
+    pub copy_tar: KeyBinding,
     pub delete: KeyBinding,
     pub rename: KeyBinding,
     pub mkdir: KeyBinding,
@@ -91,6 +92,11 @@ pub fn default_key_map() -> KeyMap {
             keys: vec![key(KeyCode::Char('c'))],
             help_key: "c".to_string(),
             help_desc: "copy file".to_string(),
+        },
+        copy_tar: KeyBinding {
+            keys: vec![key_shift(KeyCode::Char('C'))],
+            help_key: "C".to_string(),
+            help_desc: "copy file (tar)".to_string(),
         },
         delete: KeyBinding {
             keys: vec![key(KeyCode::Char('d'))],
@@ -173,5 +179,12 @@ mod tests {
         let km = default_key_map();
         assert!(km.toggle_theme.matches(&key_ctrl(KeyCode::Char('l'))));
         assert!(!km.toggle_theme.matches(&key(KeyCode::Char('l'))));
+    }
+
+    #[test]
+    fn copy_tar_matches_shift_c() {
+        let km = default_key_map();
+        assert!(km.copy_tar.matches(&key_shift(KeyCode::Char('C'))));
+        assert!(!km.copy_tar.matches(&key(KeyCode::Char('c'))));
     }
 }

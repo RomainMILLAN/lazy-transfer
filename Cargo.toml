@@ -25,6 +25,9 @@ base64 = "0.22"
 ssh2 = "0.9"
 suppaftp = "6"
 
+[features]
+vendored-openssl = ["ssh2/vendored-openssl"]
+
 [dev-dependencies]
 tempfile = "3"
 serial_test = "3"

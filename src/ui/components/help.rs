@@ -220,6 +220,10 @@ fn help_sections() -> Vec<HelpSection> {
                     desc: "copy file (upload or download)".to_string(),
                 },
                 Hint {
+                    key: "C".to_string(),
+                    desc: "copy file via tar (SSH only, compresses)".to_string(),
+                },
+                Hint {
                     key: "d".to_string(),
                     desc: "delete file/directory".to_string(),
                 },

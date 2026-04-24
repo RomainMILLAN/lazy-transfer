@@ -317,6 +317,14 @@ impl RemoteBackend for SshRunner {
 
         Ok(StreamHandle { rx, child_pid })
     }
+
+    fn upload_tar(&self, local_path: &str, remote_dest: &str) -> Result<StreamHandle, String> {
+        self.upload_dir(local_path, remote_dest)
+    }
+
+    fn download_tar(&self, remote_path: &str, local_dest: &str) -> Result<StreamHandle, String> {
+        self.download_dir(remote_path, local_dest)
+    }
 }
 
 /// Generate a simple unique ID for temp files using timestamp nanos.

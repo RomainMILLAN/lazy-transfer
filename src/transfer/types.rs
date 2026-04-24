@@ -54,6 +54,11 @@ pub struct ConnectionConfig {
     pub port: u16,
     pub auth: AuthMethod,
     pub label: String,
+    /// When set, connect via this ssh_config alias and let `ssh` resolve
+    /// Hostname/User/Port/IdentityFile/ProxyJump/etc. from ~/.ssh/config.
+    /// This is required for wildcard Host blocks (e.g. `Host julbo.*`) to
+    /// merge their options correctly.
+    pub ssh_alias: Option<String>,
 }
 
 impl ConnectionConfig {
@@ -75,6 +80,7 @@ impl ConnectionConfig {
             port: host.port,
             auth,
             label,
+            ssh_alias: Some(host.alias.clone()),
         }
     }
 }

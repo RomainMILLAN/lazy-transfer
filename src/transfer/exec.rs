@@ -26,14 +26,27 @@ pub trait Executor: Send + Sync {
     fn target(&self) -> String;
 }
 
+/// How to address the remote host when invoking ssh/scp.
+enum ConnectionMode {
+    /// An ssh_config Host alias — let `ssh` resolve everything from ~/.ssh/config.
+    /// No `-p`, `-i`, or `user@` overrides, so wildcard Host blocks (e.g. `Host julbo.*`)
+    /// and directives like ProxyJump, IdentitiesOnly, PreferredAuthentications apply
+    /// correctly.
+    SshConfigAlias { alias: String },
+    /// Explicit user/host/port/identity (manual or saved connections).
+    Direct {
+        user: String,
+        host: String,
+        port: u16,
+        identity_file: Option<String>,
+    },
+}
+
 /// RealExecutor runs actual SSH/SCP commands via std::process::Command.
 pub struct RealExecutor {
     ssh: String,
     scp: String,
-    user: String,
-    host: String,
-    port: u16,
-    identity_file: Option<String>,
+    mode: ConnectionMode,
 }
 
 impl RealExecutor {
@@ -48,23 +61,47 @@ impl RealExecutor {
         RealExecutor {
             ssh: ssh_bin.to_string(),
             scp: scp_bin.to_string(),
-            user: user.to_string(),
-            host: host.to_string(),
-            port,
-            identity_file,
+            mode: ConnectionMode::Direct {
+                user: user.to_string(),
+                host: host.to_string(),
+                port,
+                identity_file,
+            },
+        }
+    }
+
+    pub fn from_alias(ssh_bin: &str, scp_bin: &str, alias: &str) -> Self {
+        RealExecutor {
+            ssh: ssh_bin.to_string(),
+            scp: scp_bin.to_string(),
+            mode: ConnectionMode::SshConfigAlias {
+                alias: alias.to_string(),
+            },
         }
     }
 
     fn ssh_target(&self) -> String {
-        if self.user.is_empty() {
-            self.host.clone()
-        } else {
-            format!("{}@{}", self.user, self.host)
+        match &self.mode {
+            ConnectionMode::SshConfigAlias { alias } => alias.clone(),
+            ConnectionMode::Direct { user, host, .. } => {
+                if user.is_empty() {
+                    host.clone()
+                } else {
+                    format!("{}@{}", user, host)
+                }
+            }
         }
     }
 
     fn control_path(&self) -> String {
-        format!("/tmp/lt-ssh-{}@{}:{}", self.user, self.host, self.port)
+        match &self.mode {
+            ConnectionMode::SshConfigAlias { alias } => {
+                format!("/tmp/lt-ssh-alias-{}", sanitize_control_key(alias))
+            }
+            ConnectionMode::Direct {
+                user, host, port, ..
+            } => format!("/tmp/lt-ssh-{}@{}:{}", user, host, port),
+        }
     }
 
     fn ssh_base_args(&self) -> Vec<String> {
@@ -77,12 +114,19 @@ impl RealExecutor {
             "ControlMaster=auto".to_string(),
             "-o".to_string(),
             "ControlPersist=600".to_string(),
-            "-p".to_string(),
-            self.port.to_string(),
         ];
-        if let Some(ref key) = self.identity_file {
-            args.push("-i".to_string());
-            args.push(key.clone());
+        if let ConnectionMode::Direct {
+            port,
+            identity_file,
+            ..
+        } = &self.mode
+        {
+            args.push("-p".to_string());
+            args.push(port.to_string());
+            if let Some(key) = identity_file {
+                args.push("-i".to_string());
+                args.push(key.clone());
+            }
         }
         args
     }
@@ -95,15 +139,29 @@ impl RealExecutor {
             "ControlMaster=auto".to_string(),
             "-o".to_string(),
             "ControlPersist=600".to_string(),
-            "-P".to_string(),
-            self.port.to_string(),
         ];
-        if let Some(ref key) = self.identity_file {
-            args.push("-i".to_string());
-            args.push(key.clone());
+        if let ConnectionMode::Direct {
+            port,
+            identity_file,
+            ..
+        } = &self.mode
+        {
+            args.push("-P".to_string());
+            args.push(port.to_string());
+            if let Some(key) = identity_file {
+                args.push("-i".to_string());
+                args.push(key.clone());
+            }
         }
         args
     }
+}
+
+/// Replace characters that are problematic inside /tmp/ control socket paths.
+fn sanitize_control_key(s: &str) -> String {
+    s.chars()
+        .map(|c| if c.is_alphanumeric() || c == '.' || c == '-' || c == '_' { c } else { '_' })
+        .collect()
 }
 
 impl Executor for RealExecutor {

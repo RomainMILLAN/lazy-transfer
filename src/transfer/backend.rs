@@ -17,4 +17,14 @@ pub trait RemoteBackend: Send + Sync {
     fn upload_dir(&self, local_path: &str, remote_dest: &str) -> Result<StreamHandle, String>;
     /// Download a directory: tar remotely, scp the archive, extract locally, cleanup.
     fn download_dir(&self, remote_path: &str, local_dest: &str) -> Result<StreamHandle, String>;
+    /// Upload a single file via tar: tar locally, scp archive, extract remotely, cleanup.
+    /// Default impl returns an error for backends without server-side shell execution.
+    fn upload_tar(&self, _local_path: &str, _remote_dest: &str) -> Result<StreamHandle, String> {
+        Err("tar mode not supported on this backend".to_string())
+    }
+    /// Download a single file via tar: tar remotely, scp archive, extract locally, cleanup.
+    /// Default impl returns an error for backends without server-side shell execution.
+    fn download_tar(&self, _remote_path: &str, _local_dest: &str) -> Result<StreamHandle, String> {
+        Err("tar mode not supported on this backend".to_string())
+    }
 }

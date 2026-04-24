@@ -102,10 +102,12 @@ enum PendingAction {
     OverwriteUpload {
         local_path: String,
         remote_path: String,
+        tar: bool,
     },
     OverwriteDownload {
         remote_path: String,
         local_path: String,
+        tar: bool,
     },
     DeleteSavedConnection {
         index: usize,
@@ -758,6 +760,11 @@ impl App {
             return;
         }
 
+        if km.copy_tar.matches(&key) {
+            self.start_copy_tar();
+            return;
+        }
+
         if km.delete.matches(&key) {
             self.start_delete();
             return;
@@ -959,6 +966,7 @@ impl App {
                     port,
                     auth: AuthMethod::Key(value),
                     label: format!("{}@{}:{}", self.pending_user, self.pending_host, port),
+                    ssh_alias: None,
                 };
                 self.connect(conn);
             }
@@ -979,6 +987,7 @@ impl App {
                     port,
                     auth: AuthMethod::Password,
                     label: format!("{}@{}:{}", self.pending_user, self.pending_host, port),
+                    ssh_alias: None,
                 };
                 match protocol {
                     Protocol::Ftp => self.connect_ftp(conn, password),
@@ -1026,6 +1035,7 @@ impl App {
                         port,
                         auth: AuthMethod::Agent,
                         label: format!("{}@{}:{}", self.pending_user, self.pending_host, port),
+                        ssh_alias: None,
                     };
                     self.input_mode = InputMode::None;
                     self.connect(conn);
@@ -1050,6 +1060,7 @@ impl App {
                         port,
                         auth: AuthMethod::Password,
                         label: format!("{}@{}:{}", self.pending_user, self.pending_host, port),
+                        ssh_alias: None,
                     };
                     self.input_mode = InputMode::None;
                     self.connect(conn);
@@ -1109,6 +1120,7 @@ impl App {
                 port,
                 auth,
                 label,
+                ssh_alias: None,
             };
             self.connect(conn);
         }
@@ -1166,14 +1178,18 @@ impl App {
 
         let ssh_bin = self.config.ssh_bin.clone();
         let scp_bin = self.config.scp_bin.clone();
-        let identity = match &conn.auth {
-            AuthMethod::Key(path) => Some(path.clone()),
-            _ => None,
-        };
 
-        let exec = Arc::new(RealExecutor::new(
-            &ssh_bin, &scp_bin, &conn.user, &conn.host, conn.port, identity,
-        ));
+        let exec = if let Some(alias) = &conn.ssh_alias {
+            Arc::new(RealExecutor::from_alias(&ssh_bin, &scp_bin, alias))
+        } else {
+            let identity = match &conn.auth {
+                AuthMethod::Key(path) => Some(path.clone()),
+                _ => None,
+            };
+            Arc::new(RealExecutor::new(
+                &ssh_bin, &scp_bin, &conn.user, &conn.host, conn.port, identity,
+            ))
+        };
         let runner: Arc<dyn RemoteBackend> = Arc::new(SshRunner::new(exec));
 
         self.connection = Some(conn);
@@ -1290,32 +1306,58 @@ impl App {
             LeaveAlternateScreen
         )?;
 
-        // Build SSH command to establish ControlMaster session
-        let target = if conn.user.is_empty() {
-            conn.host.clone()
+        // Build SSH command to establish ControlMaster session.
+        // When connecting via an ssh_config alias, pass only the alias so ssh
+        // applies all matching Host blocks (wildcards, ProxyJump, IdentityFile...).
+        let (target, control_path, use_port) = if let Some(alias) = &conn.ssh_alias {
+            let sanitized: String = alias
+                .chars()
+                .map(|c| {
+                    if c.is_alphanumeric() || c == '.' || c == '-' || c == '_' {
+                        c
+                    } else {
+                        '_'
+                    }
+                })
+                .collect();
+            (
+                alias.clone(),
+                format!("/tmp/lt-ssh-alias-{}", sanitized),
+                false,
+            )
         } else {
-            format!("{}@{}", conn.user, conn.host)
+            let target = if conn.user.is_empty() {
+                conn.host.clone()
+            } else {
+                format!("{}@{}", conn.user, conn.host)
+            };
+            let control_path =
+                format!("/tmp/lt-ssh-{}@{}:{}", conn.user, conn.host, conn.port);
+            (target, control_path, true)
         };
-        let control_path = format!("/tmp/lt-ssh-{}@{}:{}", conn.user, conn.host, conn.port);
 
         eprintln!("Connecting to {} (password auth)...", conn.label);
         eprintln!("Type your password when prompted.\n");
 
+        let mut args: Vec<String> = vec![
+            "-o".into(),
+            "ConnectTimeout=10".into(),
+            "-o".into(),
+            format!("ControlPath={}", control_path),
+            "-o".into(),
+            "ControlMaster=auto".into(),
+            "-o".into(),
+            "ControlPersist=600".into(),
+        ];
+        if use_port {
+            args.push("-p".into());
+            args.push(conn.port.to_string());
+        }
+        args.push(target);
+        args.push("echo ok && echo $HOME".into());
+
         let status = std::process::Command::new(&self.config.ssh_bin)
-            .args([
-                "-o",
-                "ConnectTimeout=10",
-                "-o",
-                &format!("ControlPath={}", control_path),
-                "-o",
-                "ControlMaster=auto",
-                "-o",
-                "ControlPersist=600",
-                "-p",
-                &conn.port.to_string(),
-                &target,
-                "echo ok && echo $HOME",
-            ])
+            .args(&args)
             .stdin(std::process::Stdio::inherit())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::inherit())
@@ -1522,6 +1564,7 @@ impl App {
                         } else {
                             remote_path
                         },
+                        tar: false,
                     });
                     self.confirm.show(&format!(
                         "'{}' already exists on remote. Overwrite?",
@@ -1551,6 +1594,7 @@ impl App {
                     self.pending_action = Some(PendingAction::OverwriteDownload {
                         remote_path,
                         local_path: if entry.is_dir { local_dest } else { local_path },
+                        tar: false,
                     });
                     self.confirm.show(&format!(
                         "'{}' already exists locally. Overwrite?",
@@ -1560,6 +1604,67 @@ impl App {
                     self.do_download_dir(&remote_path, &local_dest, &entry.name);
                 } else {
                     self.do_download(&remote_path, &local_path, &entry.name, entry.size);
+                }
+            }
+        }
+    }
+
+    fn start_copy_tar(&mut self) {
+        match self.active_pane {
+            ActivePane::Local => {
+                let entry = match self.local_files.selected() {
+                    Some(e) if e.name != ".." => e.clone(),
+                    _ => return,
+                };
+                if entry.is_dir {
+                    return;
+                }
+                let local_path = format!("{}/{}", self.local_files.current_dir, entry.name);
+                let remote_dir = self.remote_files.current_dir.clone();
+
+                let exists_on_remote = self.remote_files.files.iter().any(|f| f.name == entry.name);
+                if exists_on_remote {
+                    self.pending_action = Some(PendingAction::OverwriteUpload {
+                        local_path,
+                        remote_path: remote_dir,
+                        tar: true,
+                    });
+                    self.confirm.show(&format!(
+                        "'{}' already exists on remote. Overwrite?",
+                        entry.name
+                    ));
+                } else {
+                    self.do_upload_tar(&local_path, &remote_dir, &entry.name, entry.size);
+                }
+            }
+            ActivePane::Remote => {
+                let entry = match self.remote_files.selected() {
+                    Some(e) if e.name != ".." => e.clone(),
+                    _ => return,
+                };
+                if entry.is_dir {
+                    return;
+                }
+                let remote_path = if self.remote_files.current_dir.ends_with('/') {
+                    format!("{}{}", self.remote_files.current_dir, entry.name)
+                } else {
+                    format!("{}/{}", self.remote_files.current_dir, entry.name)
+                };
+                let local_dest = self.local_files.current_dir.clone();
+                let local_path = format!("{}/{}", local_dest, entry.name);
+
+                if std::path::Path::new(&local_path).exists() {
+                    self.pending_action = Some(PendingAction::OverwriteDownload {
+                        remote_path,
+                        local_path: local_dest,
+                        tar: true,
+                    });
+                    self.confirm.show(&format!(
+                        "'{}' already exists locally. Overwrite?",
+                        entry.name
+                    ));
+                } else {
+                    self.do_download_tar(&remote_path, &local_dest, &entry.name, entry.size);
                 }
             }
         }
@@ -1697,6 +1802,78 @@ impl App {
         });
     }
 
+    fn do_upload_tar(
+        &mut self,
+        local_path: &str,
+        remote_dest: &str,
+        file_name: &str,
+        file_size: u64,
+    ) {
+        let job_id = self.next_job_id;
+        self.next_job_id += 1;
+
+        self.transfers.jobs.push(TransferJob {
+            id: job_id,
+            source: local_path.to_string(),
+            destination: remote_dest.to_string(),
+            direction: TransferDirection::Upload,
+            file_name: file_name.to_string(),
+            file_size,
+            status: TransferStatus::Queued,
+        });
+
+        let runner = match &self.runner {
+            Some(r) => Arc::clone(r),
+            None => return,
+        };
+        let local = local_path.to_string();
+        let remote = remote_dest.to_string();
+        let tx = self.bg_tx.clone();
+
+        thread::spawn(move || match runner.upload_tar(&local, &remote) {
+            Ok(handle) => Self::monitor_transfer(handle, job_id, tx),
+            Err(e) => {
+                let _ = tx.send(BgMsg::TransferError { job_id, error: e });
+            }
+        });
+    }
+
+    fn do_download_tar(
+        &mut self,
+        remote_path: &str,
+        local_dest: &str,
+        file_name: &str,
+        file_size: u64,
+    ) {
+        let job_id = self.next_job_id;
+        self.next_job_id += 1;
+
+        self.transfers.jobs.push(TransferJob {
+            id: job_id,
+            source: remote_path.to_string(),
+            destination: local_dest.to_string(),
+            direction: TransferDirection::Download,
+            file_name: file_name.to_string(),
+            file_size,
+            status: TransferStatus::Queued,
+        });
+
+        let runner = match &self.runner {
+            Some(r) => Arc::clone(r),
+            None => return,
+        };
+        let remote = remote_path.to_string();
+        let local = local_dest.to_string();
+        let tx = self.bg_tx.clone();
+
+        thread::spawn(move || match runner.download_tar(&remote, &local) {
+            Ok(handle) => Self::monitor_transfer(handle, job_id, tx),
+            Err(e) => {
+                let _ = tx.send(BgMsg::TransferError { job_id, error: e });
+            }
+        });
+    }
+
     fn monitor_transfer(
         handle: crate::transfer::exec::StreamHandle,
         job_id: usize,
@@ -1811,13 +1988,16 @@ impl App {
                 PendingAction::OverwriteUpload {
                     local_path,
                     remote_path,
+                    tar,
                 } => {
                     let name = std::path::Path::new(&local_path)
                         .file_name()
                         .unwrap_or_default()
                         .to_string_lossy()
                         .to_string();
-                    if std::path::Path::new(&local_path).is_dir() {
+                    if tar {
+                        self.do_upload_tar(&local_path, &remote_path, &name, 0);
+                    } else if std::path::Path::new(&local_path).is_dir() {
                         self.do_upload_dir(&local_path, &remote_path, &name);
                     } else {
                         self.do_upload(&local_path, &remote_path, &name, 0);
@@ -1826,6 +2006,7 @@ impl App {
                 PendingAction::OverwriteDownload {
                     remote_path,
                     local_path,
+                    tar,
                 } => {
                     let name = remote_path
                         .trim_end_matches('/')
@@ -1833,16 +2014,20 @@ impl App {
                         .next()
                         .unwrap_or(&remote_path)
                         .to_string();
-                    // Check if remote is a dir by looking at the file list
-                    let is_dir = self
-                        .remote_files
-                        .files
-                        .iter()
-                        .any(|f| f.name == name && f.is_dir);
-                    if is_dir {
-                        self.do_download_dir(&remote_path, &local_path, &name);
+                    if tar {
+                        self.do_download_tar(&remote_path, &local_path, &name, 0);
                     } else {
-                        self.do_download(&remote_path, &local_path, &name, 0);
+                        // Check if remote is a dir by looking at the file list
+                        let is_dir = self
+                            .remote_files
+                            .files
+                            .iter()
+                            .any(|f| f.name == name && f.is_dir);
+                        if is_dir {
+                            self.do_download_dir(&remote_path, &local_path, &name);
+                        } else {
+                            self.do_download(&remote_path, &local_path, &name, 0);
+                        }
                     }
                 }
                 PendingAction::SaveConnection => {

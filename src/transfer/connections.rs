@@ -45,6 +45,7 @@ impl SavedConnection {
             port: self.port,
             auth,
             label: format!("{}@{}:{}", self.user, self.host, self.port),
+            ssh_alias: None,
         }
     }
 
