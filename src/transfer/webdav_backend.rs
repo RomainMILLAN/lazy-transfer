@@ -427,7 +427,7 @@ impl DavClient {
         // The cnonce only has to be unpredictable per request; deriving it from the
         // counter and the server nonce avoids pulling in an RNG dependency while
         // still never repeating for a given challenge.
-        let cnonce = format!("{:08x}{}", nc, &challenge.nonce.len());
+        let cnonce = format!("{:08x}{}", nc, challenge.nonce.len());
         Some(digest_auth::authorization_header(
             challenge, user, password, method, &uri, &cnonce, nc,
         ))
