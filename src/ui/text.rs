@@ -60,6 +60,22 @@ pub fn wrap_field<'a>(
 }
 
 /// Format a byte count into a human-readable size string.
+/// Shortens `text` to `max` display columns, marking the cut with an ellipsis.
+/// Char-based, so it never splits a multi-byte character mid-way.
+pub fn truncate_ellipsis(text: &str, max: usize) -> String {
+    if max == 0 {
+        return String::new();
+    }
+    if text.chars().count() <= max {
+        return text.to_string();
+    }
+    if max == 1 {
+        return "…".to_string();
+    }
+    let kept: String = text.chars().take(max - 1).collect();
+    format!("{kept}…")
+}
+
 pub fn format_size(bytes: u64) -> String {
     if bytes < 1024 {
         format!("{} B", bytes)
@@ -75,6 +91,27 @@ pub fn format_size(bytes: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn truncate_leaves_short_text_alone() {
+        assert_eq!(truncate_ellipsis("short", 10), "short");
+        assert_eq!(truncate_ellipsis("exactly10!", 10), "exactly10!");
+    }
+
+    #[test]
+    fn truncate_marks_the_cut() {
+        assert_eq!(truncate_ellipsis("abcdefghij", 5), "abcd…");
+        assert_eq!(truncate_ellipsis("abc", 1), "…");
+        assert_eq!(truncate_ellipsis("abc", 0), "");
+    }
+
+    #[test]
+    fn truncate_never_splits_a_multibyte_char() {
+        // Would panic on a byte-based slice.
+        let out = truncate_ellipsis("café-très-long", 6);
+        assert_eq!(out.chars().count(), 6);
+        assert!(out.starts_with("café"), "{out}");
+    }
 
     #[test]
     fn short_value_no_wrap() {

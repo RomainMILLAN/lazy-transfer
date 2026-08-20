@@ -99,8 +99,8 @@ impl StatusBar {
 pub fn connection_hints() -> Vec<Hint> {
     vec![
         Hint {
-            key: "1/2/3".to_string(),
-            desc: "SSH/SFTP/FTP".to_string(),
+            key: "1-4".to_string(),
+            desc: "SSH/SFTP/FTP/DAV".to_string(),
         },
         Hint {
             key: "j/k".to_string(),

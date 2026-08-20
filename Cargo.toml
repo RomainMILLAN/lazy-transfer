@@ -24,6 +24,14 @@ chrono = "0.4"
 base64 = "0.22"
 ssh2 = "0.9"
 suppaftp = "6"
+# WebDAV: blocking HTTP client (no tokio) + read-only namespace-aware XML.
+# default-features = false is deliberate: the defaults pull `gzip`, which breaks
+# Content-Length on GET (and thus download progress). rustls/ring avoids any
+# openssl-sys, so there is no conflict with ssh2 / the vendored-openssl feature.
+ureq = { version = "3", default-features = false, features = ["rustls"] }
+roxmltree = "0.20"
+url = "2"
+percent-encoding = "2"
 
 [features]
 vendored-openssl = ["ssh2/vendored-openssl"]

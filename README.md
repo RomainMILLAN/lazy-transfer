@@ -35,6 +35,7 @@
 - **SSH/SCP** — Connect via SSH and transfer files using scp with tar for directories
 - **SFTP** — Native SFTP support via libssh2 for efficient file operations
 - **FTP** — FTP support for legacy servers with recursive transfers
+- **WebDAV** — Nextcloud/ownCloud, Synology and Apache `mod_dav`, over HTTP or HTTPS
 - **Dual-pane navigation** — Browse local and remote files side by side
 - **File operations** — Upload, download, mkdir, delete, rename, and more
 - **Progress tracking** — Real-time progress bars for all transfers
@@ -110,11 +111,20 @@ lazy-transfer --protocol sftp --host myserver --user admin
 # Direct FTP connection
 lazy-transfer --protocol ftp --host ftp.example.com --user admin
 
+# WebDAV is addressed by URL, so it is set up from the connection screen (tab 4)
+# rather than on the command line.
+
 # Force light theme
 lazy-transfer --light
 ```
 
-On first launch, a connection screen appears where you can select the protocol (SSH/SFTP/FTP), enter host and credentials, or choose from saved connections.
+On first launch, a connection screen appears where you can select the protocol (SSH/SFTP/FTP/WebDAV), enter host and credentials, or choose from saved connections.
+
+For WebDAV you enter a single **collection URL** — for example
+`https://cloud.example.com/remote.php/dav/files/alice/` for Nextcloud — and then pick
+Basic (user + password), a Bearer token, or anonymous access. If the server presents an
+untrusted certificate (self-signed, common on NAS devices), the error is shown and you are
+offered a retry that accepts it; that choice is remembered per connection.
 
 ## Configuration
 
@@ -144,10 +154,22 @@ The file is created with `0600` permissions (owner read/write only). Passwords a
       "host": "ftp.example.com",
       "user": "backup",
       "port": 21
+    },
+    {
+      "name": "Nextcloud",
+      "protocol": "webdav",
+      "host": "cloud.example.com",
+      "user": "alice",
+      "port": 443,
+      "auth_method": "basic",
+      "url": "https://cloud.example.com/remote.php/dav/files/alice/"
     }
   ]
 }
 ```
+
+For WebDAV, `url` is the field that matters — `host`, `user` and `port` are derived from it
+and kept only for display. Add `"insecure_tls": true` to accept an untrusted certificate.
 
 On subsequent launches, saved connections are available for quick access. Press `e` to edit or `x` to delete a saved connection.
 
@@ -157,7 +179,7 @@ On subsequent launches, saved connections are available for quick access. Press 
 
 | Key | Action |
 |-----|--------|
-| `1` `2` `3` | Switch protocol tab (SSH / SFTP / FTP) |
+| `1` `2` `3` `4` | Switch protocol tab (SSH / SFTP / FTP / WebDAV) |
 | `Tab` / `Shift+Tab` | Next / previous panel |
 | `j` / `k` or `Up` / `Down` | Navigate up / down |
 | `Enter` | Select / drill-down |
@@ -212,7 +234,9 @@ src/
 │   ├── runner.rs       # SshRunner — SSH/SCP via shell commands
 │   ├── sftp_backend.rs # SftpBackend — native SFTP via ssh2 crate
 │   ├── ftp_backend.rs   # FtpBackend — native FTP via suppaftp crate
+│   ├── webdav_backend.rs # WebDavBackend — WebDAV via ureq + roxmltree
 │   ├── ls_parse.rs      # Parse ls -la output
+│   ├── stream.rs        # Shared progress types (ByteProgress, ProgressReader)
 │   ├── connections.rs    # Load/save connections
 │   └── types.rs        # FileEntry, ConnectionConfig, Protocol...
 ├── config/             # CLI config resolution

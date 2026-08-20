@@ -8,6 +8,7 @@ pub mod sftp_backend;
 pub mod ssh_config;
 pub mod stream;
 pub mod types;
+pub mod webdav_backend;
 
 pub use backend::RemoteBackend;
 pub use exec::{Executor, RealExecutor, RunResult};
