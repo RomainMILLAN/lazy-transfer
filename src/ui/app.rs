@@ -27,6 +27,7 @@ use crate::ui::keys::default_key_map;
 use crate::ui::layout::{compute_connection_layout, compute_layout, Layout};
 use crate::ui::messages::Action;
 use crate::ui::style::theme;
+use crate::ui::webdav_form::{WebDavForm, WebDavStep};
 
 use super::components::statusbar::{browser_hints, connection_hints};
 
@@ -76,6 +77,8 @@ enum ActivePane {
     Remote,
 }
 
+const WEBDAV_URL_HINT: &str = "https://host/remote.php/dav/files/user/";
+
 #[derive(PartialEq)]
 enum InputMode {
     None,
@@ -87,6 +90,12 @@ enum InputMode {
     ManualAuthChoice,
     ManualKeyPath,
     ManualPassword,
+    // WebDAV has its own flow: it is addressed by URL, not host + port.
+    WebDavUrl,
+    WebDavAuthChoice,
+    WebDavUser,
+    WebDavPassword,
+    WebDavToken,
     SaveConnectionName,
     SortChoice,
 }
@@ -112,6 +121,8 @@ enum PendingAction {
     DeleteSavedConnection {
         index: usize,
     },
+    /// Reconnect the stashed WebDAV config with TLS verification disabled.
+    RetryWebDavInsecure,
     SaveConnection,
 }
 
@@ -163,6 +174,10 @@ pub struct App {
     info_msg: Option<String>,
 
     // Manual connection temp state
+    /// Present while the WebDAV connection flow is running.
+    webdav_form: Option<WebDavForm>,
+    /// Connection to retry with `insecure_tls`, awaiting the user's confirmation.
+    pending_webdav_retry: Option<ConnectionConfig>,
     pending_host: String,
     pending_user: String,
     pending_port: String,
@@ -221,6 +236,8 @@ impl App {
             bg_rx,
             bg_tx,
             info_msg: None,
+            webdav_form: None,
+            pending_webdav_retry: None,
             pending_host: String::new(),
             pending_user: String::new(),
             pending_port: String::new(),
@@ -409,7 +426,11 @@ impl App {
         }
 
         if let Some(ref conn) = self.connection {
-            let label = format!(" Connection: {} via {} ", conn.label, conn.protocol.label());
+            let label = format!(
+                " Connection: {} via {} ",
+                conn.label(),
+                conn.protocol().label()
+            );
             let style = Style::default()
                 .fg(theme::color_primary())
                 .bg(bar_bg)
@@ -440,7 +461,11 @@ impl App {
             block.render(modal_area, buf);
 
             let style = Style::default().fg(theme::color_text());
-            buf.set_string(inner.x + 1, inner.y, self.confirm.message(), style);
+            // set_string clips at the buffer edge, not the widget edge, so a long
+            // message (a deep filename) would otherwise spill past the border.
+            let max = inner.width.saturating_sub(2) as usize;
+            let msg = crate::ui::text::truncate_ellipsis(self.confirm.message(), max);
+            buf.set_stringn(inner.x + 1, inner.y, &msg, max, style);
 
             let hint = "[y]es / [n]o";
             let hint_style = Style::default().fg(theme::color_muted());
@@ -510,6 +535,8 @@ impl App {
                     self.execute_pending_action();
                 } else {
                     self.pending_action = None;
+                    // Declining the TLS prompt must not leave a stale retry behind.
+                    self.pending_webdav_retry = None;
                 }
                 return false;
             }
@@ -661,7 +688,7 @@ impl App {
     fn handle_connection_key(&mut self, key: KeyEvent) {
         let km = default_key_map();
 
-        // Tab switching: 1=SSH, 2=SFTP, 3=FTP
+        // Tab switching: 1=SSH, 2=SFTP, 3=FTP, 4=WebDAV
         if let crossterm::event::KeyCode::Char('1') = key.code {
             self.connection_panel.select_protocol(Protocol::Ssh);
             return;
@@ -672,6 +699,10 @@ impl App {
         }
         if let crossterm::event::KeyCode::Char('3') = key.code {
             self.connection_panel.select_protocol(Protocol::Ftp);
+            return;
+        }
+        if let crossterm::event::KeyCode::Char('4') = key.code {
+            self.connection_panel.select_protocol(Protocol::WebDav);
             return;
         }
 
@@ -711,11 +742,28 @@ impl App {
                     }
                 }
 
-                // Start the manual flow at the host step, pre-filled
                 self.is_manual_connect = true;
-                self.input_mode = InputMode::ManualHost;
-                self.input
-                    .show_with_value("Host", "hostname or IP...", &saved.host);
+                if Protocol::from_str_opt(&saved.protocol)
+                    .map(|p| p.uses_url())
+                    .unwrap_or(false)
+                {
+                    // WebDAV: seed the dedicated form and start at the URL step.
+                    let restored = saved.to_connection_config();
+                    let (auth, insecure) = match restored.webdav_config() {
+                        Some(cfg) => (cfg.auth.clone(), cfg.insecure_tls),
+                        None => (crate::transfer::types::WebDavAuth::Anonymous, false),
+                    };
+                    let url = saved.url.clone().unwrap_or_default();
+                    self.webdav_form = Some(WebDavForm::prefilled(url.clone(), auth, insecure));
+                    self.input_mode = InputMode::WebDavUrl;
+                    self.input
+                        .show_with_value("WebDAV URL", WEBDAV_URL_HINT, &url);
+                } else {
+                    // Start the manual flow at the host step, pre-filled
+                    self.input_mode = InputMode::ManualHost;
+                    self.input
+                        .show_with_value("Host", "hostname or IP...", &saved.host);
+                }
             }
             return;
         }
@@ -882,6 +930,23 @@ impl App {
 
     // --- Input handling ---
 
+    /// Builds a non-WebDAV connection from host/user/port + auth. Keeps the label
+    /// rule (and its "empty user" branch) in one place: `ConnectionConfig`.
+    fn plain_conn(
+        protocol: &Protocol,
+        host: String,
+        user: String,
+        port: u16,
+        auth: AuthMethod,
+    ) -> ConnectionConfig {
+        match protocol {
+            Protocol::Sftp => ConnectionConfig::sftp(host, user, port, auth),
+            Protocol::Ftp => ConnectionConfig::ftp(host, user, port),
+            // Ssh, and the fallback for anything that has no dedicated flow.
+            _ => ConnectionConfig::ssh(host, user, port, auth, None),
+        }
+    }
+
     fn handle_input_submit(&mut self, value: String) {
         match self.input_mode {
             InputMode::Mkdir => {
@@ -953,15 +1018,13 @@ impl App {
             InputMode::ManualKeyPath => {
                 let port = self.pending_port.parse().unwrap_or(22);
                 let protocol = self.connection_panel.selected_protocol.clone();
-                let conn = ConnectionConfig {
-                    protocol,
-                    host: self.pending_host.clone(),
-                    user: self.pending_user.clone(),
+                let conn = Self::plain_conn(
+                    &protocol,
+                    self.pending_host.clone(),
+                    self.pending_user.clone(),
                     port,
-                    auth: AuthMethod::Key(value),
-                    label: format!("{}@{}:{}", self.pending_user, self.pending_host, port),
-                    ssh_alias: None,
-                };
+                    AuthMethod::Key(value),
+                );
                 self.connect(conn);
             }
             InputMode::ManualPassword => {
@@ -974,21 +1037,93 @@ impl App {
                 self.pending_password = Some(password.clone());
                 let port = self.pending_port.parse().unwrap_or(21);
                 let protocol = self.connection_panel.selected_protocol.clone();
-                let conn = ConnectionConfig {
-                    protocol: protocol.clone(),
-                    host: self.pending_host.clone(),
-                    user: self.pending_user.clone(),
+                let conn = Self::plain_conn(
+                    &protocol,
+                    self.pending_host.clone(),
+                    self.pending_user.clone(),
                     port,
-                    auth: AuthMethod::Password,
-                    label: format!("{}@{}:{}", self.pending_user, self.pending_host, port),
-                    ssh_alias: None,
-                };
+                    AuthMethod::Password,
+                );
                 match protocol {
                     Protocol::Ftp => self.connect_ftp(conn, password),
                     Protocol::Sftp => self.connect_sftp(conn, Some(password)),
                     Protocol::Ssh => {
                         self.pending_password_connect = Some(conn);
                     }
+                    // Unreachable: WebDAV never enters ManualPassword, it has its
+                    // own flow (WebDavForm). Do not panic a raw-mode TUI over it.
+                    Protocol::WebDav => {}
+                }
+            }
+            InputMode::WebDavUrl => {
+                let mut form = self.webdav_form.take().unwrap_or_default();
+                match form.submit_url(value.clone()) {
+                    Ok(()) => {
+                        self.info_msg = None;
+                        self.webdav_form = Some(form);
+                        self.input_mode = InputMode::WebDavAuthChoice;
+                        self.choice.show(
+                            "WebDAV authentication:",
+                            vec![
+                                Choice {
+                                    key: 'b',
+                                    label: "Basic (user + password)".to_string(),
+                                },
+                                Choice {
+                                    key: 'd',
+                                    label: "Digest (user + password)".to_string(),
+                                },
+                                Choice {
+                                    key: 't',
+                                    label: "Bearer token".to_string(),
+                                },
+                                Choice {
+                                    key: 'n',
+                                    label: "Anonymous".to_string(),
+                                },
+                            ],
+                        );
+                    }
+                    Err(e) => {
+                        // Stay on the field with what was typed so it can be fixed.
+                        self.info_msg = Some(format!("Invalid URL: {e}"));
+                        self.webdav_form = Some(form);
+                        self.input
+                            .show_with_value("WebDAV URL", WEBDAV_URL_HINT, &value);
+                    }
+                }
+                return;
+            }
+            InputMode::WebDavUser => {
+                if let Some(mut form) = self.webdav_form.take() {
+                    let step = form.submit_user(value);
+                    let hint = if form.has_secret() {
+                        "leave empty to keep current password"
+                    } else {
+                        "WebDAV password..."
+                    };
+                    self.webdav_form = Some(form);
+                    if let WebDavStep::AskPassword = step {
+                        self.input_mode = InputMode::WebDavPassword;
+                        self.input.show_password("Password", hint);
+                        return;
+                    }
+                    self.apply_webdav_step(step);
+                }
+                return;
+            }
+            InputMode::WebDavPassword => {
+                if let Some(mut form) = self.webdav_form.take() {
+                    let step = form.submit_password(value);
+                    self.webdav_form = Some(form);
+                    self.apply_webdav_step(step);
+                }
+            }
+            InputMode::WebDavToken => {
+                if let Some(mut form) = self.webdav_form.take() {
+                    let step = form.submit_token(value);
+                    self.webdav_form = Some(form);
+                    self.apply_webdav_step(step);
                 }
             }
             InputMode::SaveConnectionName => {
@@ -1012,7 +1147,59 @@ impl App {
         self.input_mode = InputMode::None;
     }
 
+    /// Turns a `WebDavStep` into UI state. Kept separate so the form itself stays
+    /// free of any terminal concern.
+    fn apply_webdav_step(&mut self, step: WebDavStep) {
+        match step {
+            WebDavStep::Connect(conn) => {
+                self.input_mode = InputMode::None;
+                self.connect_webdav(*conn);
+            }
+            WebDavStep::Invalid(e) => {
+                self.input_mode = InputMode::None;
+                self.info_msg = Some(e);
+            }
+            // The caller drives these; reaching here means the flow was misused.
+            WebDavStep::AskUser | WebDavStep::AskPassword | WebDavStep::AskToken => {
+                self.input_mode = InputMode::None;
+            }
+        }
+    }
+
     fn handle_choice_result(&mut self, choice: char) {
+        if self.input_mode == InputMode::WebDavAuthChoice {
+            if let Some(mut form) = self.webdav_form.take() {
+                let step = form.choose_auth(choice);
+                let has_secret = form.has_secret();
+                self.webdav_form = Some(form);
+                match step {
+                    WebDavStep::AskUser => {
+                        self.input_mode = InputMode::WebDavUser;
+                        let user = self
+                            .webdav_form
+                            .as_ref()
+                            .map(|f| f.user().to_string())
+                            .unwrap_or_default();
+                        if user.is_empty() {
+                            self.input.show("User", "username...");
+                        } else {
+                            self.input.show_with_value("User", "username...", &user);
+                        }
+                    }
+                    WebDavStep::AskToken => {
+                        self.input_mode = InputMode::WebDavToken;
+                        let hint = if has_secret {
+                            "leave empty to keep current token"
+                        } else {
+                            "bearer token..."
+                        };
+                        self.input.show_password("Token", hint);
+                    }
+                    other => self.apply_webdav_step(other),
+                }
+            }
+            return;
+        }
         if self.input_mode == InputMode::ManualAuthChoice {
             match choice {
                 'k' => {
@@ -1022,15 +1209,13 @@ impl App {
                 'a' => {
                     let port = self.pending_port.parse().unwrap_or(22);
                     let protocol = self.connection_panel.selected_protocol.clone();
-                    let conn = ConnectionConfig {
-                        protocol,
-                        host: self.pending_host.clone(),
-                        user: self.pending_user.clone(),
+                    let conn = Self::plain_conn(
+                        &protocol,
+                        self.pending_host.clone(),
+                        self.pending_user.clone(),
                         port,
-                        auth: AuthMethod::Agent,
-                        label: format!("{}@{}:{}", self.pending_user, self.pending_host, port),
-                        ssh_alias: None,
-                    };
+                        AuthMethod::Agent,
+                    );
                     self.input_mode = InputMode::None;
                     self.connect(conn);
                 }
@@ -1047,15 +1232,13 @@ impl App {
                         return;
                     }
                     let port = self.pending_port.parse().unwrap_or(22);
-                    let conn = ConnectionConfig {
-                        protocol: Protocol::Ssh,
-                        host: self.pending_host.clone(),
-                        user: self.pending_user.clone(),
+                    let conn = ConnectionConfig::ssh(
+                        self.pending_host.clone(),
+                        self.pending_user.clone(),
                         port,
-                        auth: AuthMethod::Password,
-                        label: format!("{}@{}:{}", self.pending_user, self.pending_host, port),
-                        ssh_alias: None,
-                    };
+                        AuthMethod::Password,
+                        None,
+                    );
                     self.input_mode = InputMode::None;
                     self.connect(conn);
                 }
@@ -1088,12 +1271,29 @@ impl App {
         self.pending_port.clear();
         self.pending_password = None;
         self.is_manual_connect = true;
+        if self.connection_panel.selected_protocol.uses_url() {
+            self.webdav_form = Some(WebDavForm::new());
+            self.input_mode = InputMode::WebDavUrl;
+            self.input.show("WebDAV URL", WEBDAV_URL_HINT);
+            return;
+        }
+        self.webdav_form = None;
         self.input_mode = InputMode::ManualHost;
         self.input.show("Host", "hostname or IP...");
     }
 
     fn connect_direct(&mut self) {
         if let Some(host) = self.cli_host.take() {
+            if self.cli_protocol.uses_url() {
+                // Expressing a URL + auth kind + secret on the command line would
+                // mean inventing --url/--token/--password. Out of scope on purpose.
+                let _ = host;
+                self.info_msg = Some(
+                    "WebDAV: use the connection screen (tab 4) — direct CLI connect is not supported."
+                        .to_string(),
+                );
+                return;
+            }
             let user = self.cli_user.take().unwrap_or_default();
             let port = self.cli_port;
             let identity = self.cli_identity.take();
@@ -1102,28 +1302,15 @@ impl App {
                 Some(path) => AuthMethod::Key(path),
                 None => AuthMethod::Agent,
             };
-            let label = if user.is_empty() {
-                format!("{}:{}", host, port)
-            } else {
-                format!("{}@{}:{}", user, host, port)
-            };
-            let conn = ConnectionConfig {
-                protocol,
-                host,
-                user,
-                port,
-                auth,
-                label,
-                ssh_alias: None,
-            };
+            let conn = Self::plain_conn(&protocol, host, user, port, auth);
             self.connect(conn);
         }
     }
 
     fn connect(&mut self, conn: ConnectionConfig) {
-        match conn.protocol {
+        match conn.protocol() {
             Protocol::Ssh => {
-                if matches!(conn.auth, AuthMethod::Password) {
+                if matches!(conn.auth(), AuthMethod::Password) {
                     self.pending_password_connect = Some(conn);
                 } else {
                     self.connect_ssh(conn);
@@ -1140,13 +1327,14 @@ impl App {
                         .to_string(),
                 );
             }
+            Protocol::WebDav => self.connect_webdav(conn),
         }
     }
 
     fn connect_saved(&mut self, conn: ConnectionConfig, password: Option<String>) {
-        match conn.protocol {
+        match conn.protocol() {
             Protocol::Ssh => {
-                if matches!(conn.auth, AuthMethod::Password) {
+                if matches!(conn.auth(), AuthMethod::Password) {
                     self.pending_password_connect = Some(conn);
                 } else {
                     self.connect_ssh(conn);
@@ -1162,6 +1350,8 @@ impl App {
                     self.info_msg = Some("FTP requires a password.".to_string());
                 }
             }
+            // The secret already travels inside conn.webdav_config().
+            Protocol::WebDav => self.connect_webdav(conn),
         }
     }
 
@@ -1173,15 +1363,20 @@ impl App {
         let ssh_bin = self.config.ssh_bin.clone();
         let scp_bin = self.config.scp_bin.clone();
 
-        let exec = if let Some(alias) = &conn.ssh_alias {
+        let exec = if let Some(alias) = conn.ssh_alias() {
             Arc::new(RealExecutor::from_alias(&ssh_bin, &scp_bin, alias))
         } else {
-            let identity = match &conn.auth {
+            let identity = match &conn.auth() {
                 AuthMethod::Key(path) => Some(path.clone()),
                 _ => None,
             };
             Arc::new(RealExecutor::new(
-                &ssh_bin, &scp_bin, &conn.user, &conn.host, conn.port, identity,
+                &ssh_bin,
+                &scp_bin,
+                conn.user(),
+                conn.host(),
+                conn.port(),
+                identity,
             ))
         };
         let runner: Arc<dyn RemoteBackend> = Arc::new(SshRunner::new(exec));
@@ -1205,10 +1400,10 @@ impl App {
         self.info_msg = None;
         self.spinner.start("Connecting via SFTP...");
 
-        let host = conn.host.clone();
-        let port = conn.port;
-        let user = conn.user.clone();
-        let auth = conn.auth.clone();
+        let host = conn.host().to_string();
+        let port = conn.port();
+        let user = conn.user().to_string();
+        let auth = conn.auth().clone();
 
         log::info!(
             "connect_sftp: {}@{}:{} (password={})",
@@ -1249,14 +1444,57 @@ impl App {
         });
     }
 
+    fn connect_webdav(&mut self, conn: ConnectionConfig) {
+        let cfg = match conn.webdav_config() {
+            Some(c) => c.clone(),
+            None => {
+                self.info_msg =
+                    Some("WebDAV requires a URL — use the connection screen (tab 4).".to_string());
+                return;
+            }
+        };
+
+        self.connecting = true;
+        self.info_msg = None;
+        self.spinner.start("Connecting via WebDAV...");
+        log::info!(
+            "connect_webdav: {} (insecure_tls={})",
+            cfg.url,
+            cfg.insecure_tls
+        );
+
+        self.connection = Some(conn);
+        let tx = self.bg_tx.clone();
+
+        thread::spawn(move || {
+            // WebDavBackend::connect already validates the endpoint (it does the
+            // PROPFIND itself), so there is no second test_connection() here: a bad
+            // password or an untrusted certificate surfaces right now.
+            match crate::transfer::webdav_backend::WebDavBackend::connect(&cfg) {
+                Ok(backend) => {
+                    let home = backend.home_dir().unwrap_or_else(|_| "/".to_string());
+                    log::info!("connect_webdav: success, home={home}");
+                    let _ = tx.send(BgMsg::ConnectionReady {
+                        backend: std::sync::Arc::new(backend),
+                        home_dir: home,
+                    });
+                }
+                Err(e) => {
+                    log::error!("connect_webdav: failed: {e}");
+                    let _ = tx.send(BgMsg::ConnectionError(e));
+                }
+            }
+        });
+    }
+
     fn connect_ftp(&mut self, conn: ConnectionConfig, password: String) {
         self.connecting = true;
         self.info_msg = None;
         self.spinner.start("Connecting via FTP...");
 
-        let host = conn.host.clone();
-        let port = conn.port;
-        let user = conn.user.clone();
+        let host = conn.host().to_string();
+        let port = conn.port();
+        let user = conn.user().to_string();
 
         log::info!("connect_ftp: {}@{}:{}", user, host, port);
 
@@ -1303,7 +1541,7 @@ impl App {
         // Build SSH command to establish ControlMaster session.
         // When connecting via an ssh_config alias, pass only the alias so ssh
         // applies all matching Host blocks (wildcards, ProxyJump, IdentityFile...).
-        let (target, control_path, use_port) = if let Some(alias) = &conn.ssh_alias {
+        let (target, control_path, use_port) = if let Some(alias) = conn.ssh_alias() {
             let sanitized: String = alias
                 .chars()
                 .map(|c| {
@@ -1315,21 +1553,26 @@ impl App {
                 })
                 .collect();
             (
-                alias.clone(),
+                alias.to_string(),
                 format!("/tmp/lt-ssh-alias-{}", sanitized),
                 false,
             )
         } else {
-            let target = if conn.user.is_empty() {
-                conn.host.clone()
+            let target = if conn.user().is_empty() {
+                conn.host().to_string()
             } else {
-                format!("{}@{}", conn.user, conn.host)
+                format!("{}@{}", conn.user(), conn.host())
             };
-            let control_path = format!("/tmp/lt-ssh-{}@{}:{}", conn.user, conn.host, conn.port);
+            let control_path = format!(
+                "/tmp/lt-ssh-{}@{}:{}",
+                conn.user(),
+                conn.host(),
+                conn.port()
+            );
             (target, control_path, true)
         };
 
-        eprintln!("Connecting to {} (password auth)...", conn.label);
+        eprintln!("Connecting to {} (password auth)...", conn.label());
         eprintln!("Type your password when prompted.\n");
 
         let mut args: Vec<String> = vec![
@@ -1344,7 +1587,7 @@ impl App {
         ];
         if use_port {
             args.push("-p".into());
-            args.push(conn.port.to_string());
+            args.push(conn.port().to_string());
         }
         args.push(target);
         args.push("echo ok && echo $HOME".into());
@@ -1426,7 +1669,7 @@ impl App {
                     self.status_bar.set_hints(browser_hints());
 
                     if let Some(ref conn) = self.connection {
-                        self.status_bar.set_connection_info(&conn.label);
+                        self.status_bar.set_connection_info(conn.label());
                     }
 
                     self.remote_files.set_dir(&home_dir);
@@ -1443,7 +1686,7 @@ impl App {
                     self.status_bar.set_hints(browser_hints());
 
                     if let Some(ref conn) = self.connection {
-                        self.status_bar.set_connection_info(&conn.label);
+                        self.status_bar.set_connection_info(conn.label());
                     }
 
                     self.remote_files.set_dir(&home_dir);
@@ -1459,10 +1702,31 @@ impl App {
                 BgMsg::ConnectionError(e) => {
                     self.connecting = false;
                     self.spinner.stop();
-                    self.info_msg = Some(format!("Connection failed: {}", e));
-                    self.connection = None;
+                    // Captured BEFORE clearing, otherwise there is nothing to retry.
+                    let failed = self.connection.take();
                     self.runner = None;
                     log::error!("connection error: {e}");
+
+                    // Offer to accept an untrusted certificate, but only for a WebDAV
+                    // connection (ssh2 also talks about certificates) that is not
+                    // already insecure — otherwise a second failure would re-open the
+                    // dialog forever.
+                    let retry = failed
+                        .as_ref()
+                        .filter(|_| crate::transfer::webdav_backend::is_tls_untrusted(&e))
+                        .and_then(|c| c.webdav_insecure_retry());
+                    match retry {
+                        Some(next) => {
+                            self.info_msg = Some(format!("Connection failed: {}", e));
+                            self.pending_webdav_retry = Some(next);
+                            self.pending_action = Some(PendingAction::RetryWebDavInsecure);
+                            self.confirm
+                                .show("Untrusted TLS certificate. Accept and retry?");
+                        }
+                        None => {
+                            self.info_msg = Some(format!("Connection failed: {}", e));
+                        }
+                    }
                 }
                 BgMsg::RemoteFilesLoaded(files) => {
                     self.loading_remote = false;
@@ -1903,6 +2167,18 @@ impl App {
         }
     }
 
+    /// Delete confirmation text. Branches on `is_dir` ONLY, never on the protocol:
+    /// `start_delete` is deliberately protocol-blind, and the moment the wording
+    /// consulted the active protocol the `Arc<dyn RemoteBackend>` would lose its
+    /// point. The domain has two deletions, not four: a file and a subtree.
+    fn delete_prompt(entry: &FileEntry) -> String {
+        if entry.is_dir {
+            format!("Delete '{}' and all its contents?", entry.name)
+        } else {
+            format!("Delete '{}'?", entry.name)
+        }
+    }
+
     fn start_delete(&mut self) {
         match self.active_pane {
             ActivePane::Local => {
@@ -1911,8 +2187,9 @@ impl App {
                         return;
                     }
                     let path = format!("{}/{}", self.local_files.current_dir, entry.name);
+                    let prompt = Self::delete_prompt(entry);
                     self.pending_action = Some(PendingAction::DeleteLocal { path });
-                    self.confirm.show(&format!("Delete '{}'?", entry.name));
+                    self.confirm.show(&prompt);
                 }
             }
             ActivePane::Remote => {
@@ -1925,8 +2202,9 @@ impl App {
                     } else {
                         format!("{}/{}", self.remote_files.current_dir, entry.name)
                     };
+                    let prompt = Self::delete_prompt(entry);
                     self.pending_action = Some(PendingAction::DeleteRemote { path });
-                    self.confirm.show(&format!("Delete '{}'?", entry.name));
+                    self.confirm.show(&prompt);
                 }
             }
         }
@@ -2027,6 +2305,11 @@ impl App {
                     self.input_mode = InputMode::SaveConnectionName;
                     self.input
                         .show("Connection Name", "name for this connection...");
+                }
+                PendingAction::RetryWebDavInsecure => {
+                    if let Some(conn) = self.pending_webdav_retry.take() {
+                        self.connect_webdav(conn);
+                    }
                 }
                 PendingAction::DeleteSavedConnection { index } => {
                     let mut conns = crate::transfer::connections::load();

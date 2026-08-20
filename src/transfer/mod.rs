@@ -1,5 +1,6 @@
 pub mod backend;
 pub mod connections;
+pub mod digest_auth;
 pub mod exec;
 pub mod ftp_backend;
 pub mod ls_parse;
@@ -8,6 +9,7 @@ pub mod sftp_backend;
 pub mod ssh_config;
 pub mod stream;
 pub mod types;
+pub mod webdav_backend;
 
 pub use backend::RemoteBackend;
 pub use exec::{Executor, RealExecutor, RunResult};

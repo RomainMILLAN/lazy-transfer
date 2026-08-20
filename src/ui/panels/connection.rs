@@ -83,6 +83,13 @@ impl ConnectionPanel {
                     }
                 }
             }
+            Protocol::WebDav => {
+                for (i, saved) in self.saved_connections.iter().enumerate() {
+                    if saved.matches_protocol(&Protocol::WebDav) {
+                        self.entries.push(ConnectionEntry::Saved(i));
+                    }
+                }
+            }
         }
 
         // Always add Manual at the end
@@ -300,8 +307,24 @@ impl ConnectionPanel {
                 }
                 ConnectionEntry::Saved(idx) => {
                     let saved = &self.saved_connections[*idx];
-                    let info = format!("{}@{}:{}", saved.user, saved.host, saved.port);
-                    let badge = format!("[{}]", saved.protocol.to_uppercase());
+                    // A WebDAV endpoint is identified by its URL: two accounts on the
+                    // same host would otherwise both render as "@host:443".
+                    let proto = Protocol::from_str_opt(&saved.protocol);
+                    let info = match &proto {
+                        Some(p) => crate::transfer::types::display_identity(
+                            p,
+                            &saved.user,
+                            &saved.host,
+                            saved.port,
+                            saved.url.as_deref(),
+                        ),
+                        None => format!("{}@{}:{}", saved.user, saved.host, saved.port),
+                    };
+                    let badge = match &proto {
+                        Some(p) => format!("[{}]", p.label().to_uppercase()),
+                        // Unknown protocol in a hand-edited file: show it verbatim.
+                        None => format!("[{}]", saved.protocol.to_uppercase()),
+                    };
 
                     let style = if is_selected {
                         Style::default()
@@ -347,6 +370,7 @@ impl ConnectionPanel {
             ("1:SSH", Protocol::Ssh),
             ("2:SFTP", Protocol::Sftp),
             ("3:FTP", Protocol::Ftp),
+            ("4:WebDAV", Protocol::WebDav),
         ];
 
         let mut tx = x + 1;
@@ -441,22 +465,60 @@ mod tests {
         assert!(panel.is_manual_selected());
     }
 
-    #[test]
-    fn saved_connections_shown() {
-        let saved = vec![SavedConnection {
-            name: "My FTP".to_string(),
-            protocol: "ftp".to_string(),
-            host: "ftp.example.com".to_string(),
+    fn sample_saved(name: &str, protocol: &str) -> SavedConnection {
+        SavedConnection {
+            name: name.to_string(),
+            protocol: protocol.to_string(),
+            host: "example.com".to_string(),
             user: "admin".to_string(),
             port: 21,
             auth_method: "password".to_string(),
             identity_file: None,
             password: None,
-        }];
+            url: if protocol == "webdav" {
+                Some("https://example.com/dav/admin/".to_string())
+            } else {
+                None
+            },
+            insecure_tls: false,
+        }
+    }
+
+    #[test]
+    fn saved_connections_shown() {
+        let saved = vec![sample_saved("My FTP", "ftp")];
         let mut panel = ConnectionPanel::new(vec![], saved);
         panel.select_protocol(Protocol::Ftp);
         // 1 saved FTP + Manual
         assert_eq!(panel.entries.len(), 2);
         assert!(panel.selected_saved().is_some());
+    }
+
+    #[test]
+    fn webdav_tab_lists_only_webdav_saved() {
+        let saved = vec![
+            sample_saved("ssh one", "ssh"),
+            sample_saved("ftp one", "ftp"),
+            sample_saved("dav one", "webdav"),
+        ];
+        let mut panel = ConnectionPanel::new(sample_hosts(), saved);
+        panel.select_protocol(Protocol::WebDav);
+        // The WebDAV tab never lists ssh_config hosts: 1 saved + Manual.
+        assert_eq!(panel.entries.len(), 2);
+        assert_eq!(
+            panel.selected_saved().map(|s| s.name.as_str()),
+            Some("dav one")
+        );
+        assert!(panel.selected_ssh_host().is_none());
+        panel.move_down();
+        assert!(panel.is_manual_selected());
+    }
+
+    #[test]
+    fn webdav_tab_without_saved_shows_only_manual() {
+        let mut panel = ConnectionPanel::new(sample_hosts(), vec![]);
+        panel.select_protocol(Protocol::WebDav);
+        assert_eq!(panel.entries.len(), 1);
+        assert!(panel.is_manual_selected());
     }
 }

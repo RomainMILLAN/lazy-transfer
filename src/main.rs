@@ -1,7 +1,7 @@
 use clap::Parser;
 use std::process;
 
-/// A TUI dual-pane file manager for remote transfers (SSH, SFTP, FTP).
+/// A TUI dual-pane file manager for remote transfers (SSH, SFTP, FTP, WebDAV).
 #[derive(Parser)]
 #[command(about)]
 #[command(version = long_version())]
@@ -10,7 +10,7 @@ struct Cli {
     #[arg(long)]
     light: bool,
 
-    /// Protocol to use: ssh, sftp, ftp
+    /// Protocol to use: ssh, sftp, ftp, webdav
     #[arg(long, default_value = "ssh")]
     protocol: String,
 
@@ -22,7 +22,7 @@ struct Cli {
     #[arg(short, long)]
     user: Option<String>,
 
-    /// Port (default: 22 for SSH/SFTP, 21 for FTP)
+    /// Port (default: 22 for SSH/SFTP, 21 for FTP; taken from the URL for WebDAV)
     #[arg(short, long)]
     port: Option<u16>,
 
@@ -78,11 +78,9 @@ fn main() {
         cfg.start_dir
     );
 
-    let protocol = match cli.protocol.to_lowercase().as_str() {
-        "sftp" => lazy_transfer::transfer::types::Protocol::Sftp,
-        "ftp" => lazy_transfer::transfer::types::Protocol::Ftp,
-        _ => lazy_transfer::transfer::types::Protocol::Ssh,
-    };
+    // Unknown values keep falling back to Ssh, as before.
+    let protocol =
+        lazy_transfer::transfer::types::Protocol::from_str_opt(&cli.protocol).unwrap_or_default();
     let port = cli.port.unwrap_or_else(|| protocol.default_port());
 
     let mut app =
