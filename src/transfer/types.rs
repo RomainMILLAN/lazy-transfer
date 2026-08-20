@@ -171,9 +171,16 @@ pub fn parse_webdav_url(raw: &str) -> Result<WebDavUrl, String> {
     if trimmed.is_empty() {
         return Err("URL vide".to_string());
     }
+    // `dav://` and `davs://` are the file-manager spellings (GVFS, Dolphin,
+    // Cyberduck, and BigCommerce's docs). They mean plain HTTP and HTTPS.
+    let trimmed = match trimmed.split_once("://") {
+        Some(("davs", rest)) => format!("https://{rest}"),
+        Some(("dav", rest)) => format!("http://{rest}"),
+        _ => trimmed.to_string(),
+    };
     // A bare host is the common paste; assume TLS rather than silently downgrading.
     let with_scheme = if trimmed.contains("://") {
-        trimmed.to_string()
+        trimmed.clone()
     } else {
         format!("https://{trimmed}")
     };
@@ -183,7 +190,7 @@ pub fn parse_webdav_url(raw: &str) -> Result<WebDavUrl, String> {
     let scheme = url.scheme().to_string();
     if scheme != "http" && scheme != "https" {
         return Err(format!(
-            "schéma '{scheme}' non supporté: seuls http:// et https:// le sont"
+            "schéma '{scheme}' non supporté: utilisez http(s):// ou dav(s)://"
         ));
     }
     if url.host_str().unwrap_or_default().is_empty() {
@@ -685,6 +692,22 @@ mod tests {
             u.normalized
         );
         assert!(!u.normalized.contains("alice"), "{}", u.normalized);
+    }
+
+    #[test]
+    fn parse_webdav_url_accepts_the_file_manager_schemes() {
+        // What you get when copying out of GVFS/Dolphin/Cyberduck, or out of the
+        // BigCommerce control panel.
+        let secure = parse_webdav_url("davs://store-abc.example.com/dav/").unwrap();
+        assert_eq!(secure.scheme, "https");
+        assert_eq!(secure.port, 443);
+        assert_eq!(secure.host, "store-abc.example.com");
+        assert_eq!(secure.normalized, "https://store-abc.example.com/dav/");
+
+        let plain = parse_webdav_url("dav://nas.local/share").unwrap();
+        assert_eq!(plain.scheme, "http");
+        assert_eq!(plain.port, 80);
+        assert_eq!(plain.normalized, "http://nas.local/share/");
     }
 
     #[test]

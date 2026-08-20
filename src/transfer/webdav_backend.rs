@@ -49,6 +49,33 @@ fn dav_error(op: &str, path: &str, status: u16) -> String {
     format!("WebDAV {op} '{path}' → HTTP {status}: {hint}")
 }
 
+/// Builds the 401 message from the server's `WWW-Authenticate` challenge.
+///
+/// Saying "check your password" when the server never offered Basic sends the user
+/// chasing the wrong problem — their credentials may be perfectly correct.
+fn unauthorized_error(op: &str, path: &str, challenge: Option<&str>) -> String {
+    let lower = challenge.unwrap_or("").to_ascii_lowercase();
+    let offers_basic = lower.contains("basic");
+    let offers_bearer = lower.contains("bearer");
+    let offers_digest = lower.contains("digest");
+
+    // Digest-only is the notable case: SabreDAV-based hosts (BigCommerce among
+    // them) advertise nothing else, and Digest is not implemented here.
+    if offers_digest && !offers_basic && !offers_bearer {
+        return format!(
+            "WebDAV {op} '{path}' → HTTP 401: ce serveur exige l'authentification Digest, \
+             qui n'est pas supportée (il n'accepte ni Basic ni Bearer)"
+        );
+    }
+    let mut msg = format!(
+        "WebDAV {op} '{path}' → HTTP 401: authentification refusée: vérifiez identifiant/mot de passe ou le token"
+    );
+    if offers_digest {
+        msg.push_str(" (le serveur accepte aussi Digest, non supporté)");
+    }
+    msg
+}
+
 /// Heuristic: does this error look like a TLS trust failure?
 ///
 /// It lives here, next to the code that produces the message, because this module
@@ -366,6 +393,14 @@ impl DavClient {
         };
 
         let status = res.status().as_u16();
+        if status == 401 {
+            let challenge = res
+                .headers()
+                .get("www-authenticate")
+                .and_then(|v| v.to_str().ok())
+                .map(str::to_string);
+            return Err(unauthorized_error(method, url, challenge.as_deref()));
+        }
         let text = res
             .body_mut()
             .with_config()
@@ -1271,6 +1306,48 @@ mod tests {
         let msg = dav_error("MOVE", "/a/b.txt", 412);
         assert!(msg.contains("MOVE"), "{msg}");
         assert!(msg.contains("/a/b.txt"), "{msg}");
+    }
+
+    // --- unauthorized_error ---
+
+    #[test]
+    fn digest_only_server_is_named_as_such() {
+        // The real challenge from a SabreDAV host (BigCommerce).
+        let msg = unauthorized_error(
+            "PROPFIND",
+            "/dav/",
+            Some(r#"Digest realm="SabreDAV",qop="auth",nonce="6a86ecab",opaque="df58bd""#),
+        );
+        assert!(msg.contains("Digest"), "{msg}");
+        assert!(
+            !msg.contains("vérifiez identifiant"),
+            "must not blame the credentials: {msg}"
+        );
+    }
+
+    #[test]
+    fn basic_server_blames_the_credentials() {
+        let msg = unauthorized_error("PROPFIND", "/dav/", Some(r#"Basic realm="dav""#));
+        assert!(msg.contains("vérifiez identifiant"), "{msg}");
+        assert!(!msg.contains("Digest"), "{msg}");
+    }
+
+    #[test]
+    fn a_server_offering_both_still_blames_the_credentials_first() {
+        let msg = unauthorized_error(
+            "PROPFIND",
+            "/dav/",
+            Some(r#"Basic realm="x", Digest realm="x""#),
+        );
+        assert!(msg.contains("vérifiez identifiant"), "{msg}");
+        assert!(msg.contains("Digest"), "should still mention it: {msg}");
+    }
+
+    #[test]
+    fn missing_challenge_falls_back_to_the_generic_message() {
+        let msg = unauthorized_error("PROPFIND", "/dav/", None);
+        assert!(msg.contains("401"), "{msg}");
+        assert!(msg.contains("vérifiez identifiant"), "{msg}");
     }
 
     // --- is_tls_untrusted ---

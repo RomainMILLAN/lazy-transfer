@@ -32,6 +32,9 @@ ureq = { version = "3", default-features = false, features = ["rustls"] }
 roxmltree = "0.20"
 url = "2"
 percent-encoding = "2"
+# WebDAV Digest auth (RFC 7616). MD5 is weak, but it is what the servers
+# requiring Digest (SabreDAV/BigCommerce among them) dictate.
+md-5 = "0.11"
 
 [features]
 vendored-openssl = ["ssh2/vendored-openssl"]
