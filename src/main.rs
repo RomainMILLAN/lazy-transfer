@@ -1,5 +1,6 @@
 use clap::Parser;
 use std::process;
+use std::sync::LazyLock;
 
 /// A TUI dual-pane file manager for remote transfers (SSH, SFTP, FTP, WebDAV).
 #[derive(Parser)]
@@ -31,19 +32,24 @@ struct Cli {
     identity: Option<String>,
 }
 
-fn long_version() -> &'static str {
-    concat!(
-        "version=",
+/// Built once, then borrowed for the rest of the process: clap wants a
+/// `&'static str`, and `concat!` cannot take `std::env::consts` because those
+/// are consts rather than literals. Paying a `LazyLock` is what buys the OS and
+/// arch being read *here*, in the binary, where they describe the target — a
+/// build script only knows the host, and would mislabel every cross build.
+static LONG_VERSION: LazyLock<String> = LazyLock::new(|| {
+    format!(
+        "version={}, commit={}, build date={}, os={}, arch={}",
         env!("CARGO_PKG_VERSION"),
-        ", commit=",
         env!("LT_GIT_COMMIT"),
-        ", build date=",
         env!("LT_BUILD_DATE"),
-        ", os=",
-        env!("LT_OS"),
-        ", arch=",
-        env!("LT_ARCH"),
+        std::env::consts::OS,
+        std::env::consts::ARCH,
     )
+});
+
+fn long_version() -> &'static str {
+    LONG_VERSION.as_str()
 }
 
 fn main() {

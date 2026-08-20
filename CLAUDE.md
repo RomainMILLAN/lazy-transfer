@@ -4,7 +4,9 @@ TUI dual-pane file manager for remote transfers (SSH/SCP, SFTP, FTP, WebDAV), bu
 
 ## Build & Run
 
-Requires `libssh2-dev` on Linux for SFTP support (`ssh2` crate).
+Requires OpenSSL headers + `pkg-config` (libssh2 is always vendored by `libssh2-sys`,
+so there is no `libssh2-dev` to install). `--features vendored-openssl` compiles OpenSSL
+in too and needs nothing from the system — that is what the release binaries use.
 
 ```bash
 cargo build
@@ -29,6 +31,34 @@ cargo test --test webdav_live -- --ignored --test-threads=1
 `tests/webdav_wire.rs` runs offline against an in-process HTTP server and locks the PUT
 wire format (explicit `Content-Length`, never chunked). `tests/webdav_mem.rs` and
 `tests/webdav_tls.rs` are ignored live checks for streaming and self-signed certificates.
+
+## Release
+
+Tag-driven. `.github/workflows/release.yml` builds four targets (linux gnu x86_64/aarch64,
+macOS x86_64/aarch64) with `--features vendored-openssl`, tars each binary with `LICENSE`,
+and publishes them plus `SHA256SUMS` via `softprops/action-gh-release`.
+
+```bash
+# bump `version` in Cargo.toml first — the workflow refuses a tag that disagrees with it
+git tag -a v0.3.0 -m "v0.3.0" && git push origin v0.3.0
+```
+
+- **`workflow_dispatch` is the rehearsal room.** Run it to exercise all four targets without
+  cutting a tag; the `release` job is gated on `refs/tags/` so no release appears. Use it
+  before touching anything in that workflow — a pushed tag is not something you take back.
+- The `verify` job must keep running on **every** trigger. A job-level `if:` restricting it to
+  tags would skip it off-tag, and a skipped `needs:` skips its dependents — which would make
+  `workflow_dispatch` build nothing at all.
+- Tag patterns accept `v0.3.0` **and** `0.3.0`: the repo already carries a bare `0.2.0` tag,
+  and a `v*`-only trigger is precisely why it never produced a release.
+- **`.cargo/config.toml` owns the cross-compilation knowledge** (linker, `CC`, `AR`). The
+  workflow only installs the toolchain packages, so any CI build reproduces verbatim locally.
+- **OS/arch are read in the binary, never in `build.rs`** — in a build script
+  `std::env::consts` describes the *host*, so every cross build would mislabel itself.
+  `build.rs` stamps only what the binary cannot know: the commit and the build date (which
+  honours `SOURCE_DATE_EPOCH`).
+- `Cargo.lock` is committed and every `cargo` invocation passes `--locked`. Release archives
+  stay flat (binary + `LICENSE`) because the documented install is `tar -xz lazy-transfer`.
 
 ## Architecture
 

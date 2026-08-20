@@ -57,18 +57,28 @@ Per-protocol notes:
 
 ## Prerequisites
 
-- Rust (stable)
-- Linux: `libssh2-dev` package for SFTP support
+The published binaries need nothing at all — libssh2 and OpenSSL are compiled
+into them. This section is only for building from source.
+
+- Rust 1.94 or newer
+- OpenSSL development headers and `pkg-config` (libssh2 itself is always vendored
+  by the `libssh2-sys` crate, so there is no `libssh2-dev` to install)
 
 ```bash
 # Ubuntu/Debian
-sudo apt install libssh2-1-dev
+sudo apt install pkg-config libssl-dev
 
 # Fedora/RHEL
-sudo dnf install libssh2-devel
+sudo dnf install pkg-config openssl-devel
 
 # macOS (Homebrew)
-brew install libssh2
+brew install pkg-config openssl@3
+```
+
+Or skip all of it and vendor OpenSSL too:
+
+```bash
+cargo build --release --features vendored-openssl
 ```
 
 ## Installation
@@ -77,16 +87,29 @@ brew install libssh2
 
 Pre-built binaries are available on the [releases page](https://github.com/RomainMILLAN/lazy-transfer/releases).
 
-Download the archive matching your platform, extract it, and move the binary to a directory in your `PATH`:
+Available assets: `lazy-transfer-linux-x86_64`, `lazy-transfer-linux-aarch64`,
+`lazy-transfer-macos-x86_64`, `lazy-transfer-macos-aarch64`. Each archive holds the
+binary and the licence; every release also publishes a `SHA256SUMS` file.
+
+Quick — one line, nothing left behind:
 
 ```bash
-# Example for Linux x86_64 — adjust the version and asset name as needed
+# Adjust the asset name to your platform
 curl -L https://github.com/RomainMILLAN/lazy-transfer/releases/latest/download/lazy-transfer-linux-x86_64.tar.gz \
-  | tar -xz
+  | tar -xz lazy-transfer
 mv lazy-transfer ~/.local/bin/
 ```
 
-Available assets: `lazy-transfer-linux-x86_64`, `lazy-transfer-linux-aarch64`, `lazy-transfer-macos-x86_64`, `lazy-transfer-macos-aarch64`.
+Verified — the archive has to touch the disk for its checksum to mean anything:
+
+```bash
+BASE=https://github.com/RomainMILLAN/lazy-transfer/releases/latest/download
+curl -LO "$BASE/lazy-transfer-linux-x86_64.tar.gz"
+curl -LO "$BASE/SHA256SUMS"
+sha256sum -c --ignore-missing SHA256SUMS   # must print an OK line
+tar -xzf lazy-transfer-linux-x86_64.tar.gz lazy-transfer
+mv lazy-transfer ~/.local/bin/
+```
 
 ### From source
 
