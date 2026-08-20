@@ -75,6 +75,13 @@ impl ByteProgress {
         }
     }
 
+    /// Un-counts `n` bytes, for a request whose body had to be replayed (a PUT
+    /// rejected by an auth challenge). `last_pct` is deliberately NOT lowered: the
+    /// bar must never travel backwards in front of the user.
+    pub fn rewind(&mut self, n: u64) {
+        self.done = self.done.saturating_sub(n);
+    }
+
     pub fn finish(&mut self) {
         if self.last_pct < 100 {
             self.last_pct = 100;
@@ -193,6 +200,29 @@ mod tests {
         p.advance(4096);
         p.finish();
         assert_eq!(drain(&rx), vec!["100%"]);
+    }
+
+    #[test]
+    fn rewind_uncounts_without_moving_the_bar_backwards() {
+        let (tx, rx) = mpsc::channel();
+        let mut p = ByteProgress::new(100, tx);
+        p.advance(50);
+        assert_eq!(drain(&rx), vec!["50%"]);
+        // A replayed PUT body: the bytes are un-counted, but the displayed
+        // percentage must not travel backwards in front of the user.
+        p.rewind(50);
+        p.advance(50);
+        assert!(drain(&rx).is_empty(), "the bar must not repeat or regress");
+        p.advance(50);
+        assert_eq!(drain(&rx), vec!["100%"]);
+    }
+
+    #[test]
+    fn rewind_past_zero_saturates() {
+        let (tx, _rx) = mpsc::channel();
+        let mut p = ByteProgress::new(10, tx);
+        p.advance(1);
+        p.rewind(999);
     }
 
     #[test]

@@ -1070,6 +1070,10 @@ impl App {
                                     label: "Basic (user + password)".to_string(),
                                 },
                                 Choice {
+                                    key: 'd',
+                                    label: "Digest (user + password)".to_string(),
+                                },
+                                Choice {
                                     key: 't',
                                     label: "Bearer token".to_string(),
                                 },

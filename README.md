@@ -35,7 +35,8 @@
 - **SSH/SCP** — Connect via SSH and transfer files using scp with tar for directories
 - **SFTP** — Native SFTP support via libssh2 for efficient file operations
 - **FTP** — FTP support for legacy servers with recursive transfers
-- **WebDAV** — Nextcloud/ownCloud, Synology and Apache `mod_dav`, over HTTP or HTTPS
+- **WebDAV** — Nextcloud/ownCloud, Synology, Apache `mod_dav` and SabreDAV hosts
+  (BigCommerce), over HTTP or HTTPS, with Basic, Digest, Bearer or anonymous auth
 - **Dual-pane navigation** — Browse local and remote files side by side
 - **File operations** — Upload, download, mkdir, delete, rename, and more
 - **Progress tracking** — Real-time progress bars for all transfers
@@ -122,7 +123,13 @@ On first launch, a connection screen appears where you can select the protocol (
 
 For WebDAV you enter a single **collection URL** — for example
 `https://cloud.example.com/remote.php/dav/files/alice/` for Nextcloud — and then pick
-Basic (user + password), a Bearer token, or anonymous access. If the server presents an
+Basic (user + password), Digest (same, but challenge-response), a Bearer token, or
+anonymous access. `dav://` and `davs://` URLs are accepted too, so you can paste
+straight from a file manager.
+
+Pick **Digest** when the server refuses Basic — SabreDAV-based hosts such as
+BigCommerce (`https://store-xxxx.mybigcommerce.com/dav/`) advertise nothing else. The
+error message tells you when that is the case. If the server presents an
 untrusted certificate (self-signed, common on NAS devices), the error is shown and you are
 offered a retry that accepts it; that choice is remembered per connection.
 

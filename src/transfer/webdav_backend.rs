@@ -4,6 +4,7 @@ use std::time::Duration;
 use ureq::http;
 
 use crate::transfer::backend::RemoteBackend;
+use crate::transfer::digest_auth;
 use crate::transfer::stream::{spawn_transfer, ByteProgress, ProgressReader, StreamHandle};
 use crate::transfer::types::{FileEntry, WebDavConfig};
 
@@ -53,25 +54,38 @@ fn dav_error(op: &str, path: &str, status: u16) -> String {
 ///
 /// Saying "check your password" when the server never offered Basic sends the user
 /// chasing the wrong problem — their credentials may be perfectly correct.
-fn unauthorized_error(op: &str, path: &str, challenge: Option<&str>) -> String {
+fn unauthorized_error(
+    op: &str,
+    path: &str,
+    challenge: Option<&str>,
+    digest_attempted: bool,
+) -> String {
     let lower = challenge.unwrap_or("").to_ascii_lowercase();
     let offers_basic = lower.contains("basic");
     let offers_bearer = lower.contains("bearer");
     let offers_digest = lower.contains("digest");
 
-    // Digest-only is the notable case: SabreDAV-based hosts (BigCommerce among
-    // them) advertise nothing else, and Digest is not implemented here.
+    // Having answered a Digest challenge and still being refused means the
+    // credentials are wrong — not that the scheme is unavailable.
+    if digest_attempted {
+        return format!(
+            "WebDAV {op} '{path}' → HTTP 401: identifiants Digest refusés: \
+             vérifiez identifiant/mot de passe"
+        );
+    }
+    // Digest-only servers (SabreDAV, and BigCommerce on top of it) advertise nothing
+    // else, so the fix is to pick Digest rather than to re-check the password.
     if offers_digest && !offers_basic && !offers_bearer {
         return format!(
-            "WebDAV {op} '{path}' → HTTP 401: ce serveur exige l'authentification Digest, \
-             qui n'est pas supportée (il n'accepte ni Basic ni Bearer)"
+            "WebDAV {op} '{path}' → HTTP 401: ce serveur exige l'authentification \
+             Digest — choisissez « Digest » dans le dialogue d'authentification"
         );
     }
     let mut msg = format!(
         "WebDAV {op} '{path}' → HTTP 401: authentification refusée: vérifiez identifiant/mot de passe ou le token"
     );
     if offers_digest {
-        msg.push_str(" (le serveur accepte aussi Digest, non supporté)");
+        msg.push_str(" (le serveur accepte aussi Digest)");
     }
     msg
 }
@@ -314,6 +328,21 @@ fn parse_propfind(xml: &str, dir_path_decoded: &str) -> Result<Vec<FileEntry>, S
 // Client
 // ---------------------------------------------------------------------------
 
+/// Outcome of one HTTP exchange. A 401 is modelled separately because it is the
+/// only status that may be answered and retried rather than reported.
+enum Sent {
+    Response(u16, String),
+    /// Carries the `WWW-Authenticate` challenge, when the server sent one.
+    Unauthorized(Option<String>),
+}
+
+fn challenge_of<T>(res: &http::Response<T>) -> Option<String> {
+    res.headers()
+        .get("www-authenticate")
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_string)
+}
+
 /// Clonable WebDAV client. `ureq::Agent` is `Clone + Send + Sync` and clones share
 /// the connection pool, so a transfer thread gets an OWNED value.
 ///
@@ -324,13 +353,84 @@ fn parse_propfind(xml: &str, dir_path_decoded: &str) -> Result<Vec<FileEntry>, S
 struct DavClient {
     agent: ureq::Agent,
     base: url::Url,
-    /// Pre-computed header value, so the secret itself never lives here.
+    /// Pre-computed header value for Basic/Bearer, so the secret itself never
+    /// lives here. `None` for Digest and anonymous.
     auth: Option<String>,
+    /// Digest credentials, kept only when that scheme was chosen: Digest is
+    /// challenge-response, so nothing can be pre-computed.
+    digest: Option<(String, String)>,
+    /// Nonce counter, shared by every clone of this client so that a `nc` value is
+    /// never reused against the same server nonce (which is what replay protection
+    /// relies on).
+    nonce_count: std::sync::Arc<std::sync::atomic::AtomicU32>,
+    /// Last Digest challenge seen. A server nonce is reusable across requests —
+    /// that is precisely what the incrementing `nc` is for — so caching it means
+    /// only the very first request pays the extra 401 round trip. It also lets the
+    /// streamed PUT authenticate up front, which matters because its body cannot be
+    /// replayed after a rejection.
+    challenge: std::sync::Arc<std::sync::Mutex<Option<digest_auth::Challenge>>>,
 }
 
 impl DavClient {
     fn url_for_file(&self, logical: &str) -> Result<String, String> {
         url_for(&self.base, logical, false)
+    }
+
+    /// Records a challenge for reuse. Returns true when it is one we can answer.
+    fn learn_challenge(&self, header: Option<&str>) -> bool {
+        match header.and_then(digest_auth::parse_challenge) {
+            Some(c) if c.is_supported() => {
+                if let Ok(mut slot) = self.challenge.lock() {
+                    *slot = Some(c);
+                }
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// The `Authorization` value to send for this request: the pre-computed
+    /// Basic/Bearer header, or a Digest response built from the cached challenge.
+    fn auth_header_for(&self, method: &str, url: &str) -> Option<String> {
+        if let Some(a) = &self.auth {
+            return Some(a.clone());
+        }
+        let cached = self.challenge.lock().ok()?.clone()?;
+        self.digest_response(&cached, method, url)
+    }
+
+    /// Answers a Digest challenge for `url`, producing the `Authorization` value.
+    ///
+    /// `uri` must be the request-target as sent on the wire (path plus query), not
+    /// the absolute URL: servers hash exactly what they received.
+    fn digest_response(
+        &self,
+        challenge: &digest_auth::Challenge,
+        method: &str,
+        url: &str,
+    ) -> Option<String> {
+        let (user, password) = self.digest.as_ref()?;
+        if !challenge.is_supported() {
+            return None;
+        }
+        let uri = match url::Url::parse(url) {
+            Ok(u) => match u.query() {
+                Some(q) => format!("{}?{}", u.path(), q),
+                None => u.path().to_string(),
+            },
+            Err(_) => url.to_string(),
+        };
+        let nc = self
+            .nonce_count
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            + 1;
+        // The cnonce only has to be unpredictable per request; deriving it from the
+        // counter and the server nonce avoids pulling in an RNG dependency while
+        // still never repeating for a given challenge.
+        let cnonce = format!("{:08x}{}", nc, &challenge.nonce.len());
+        Some(digest_auth::authorization_header(
+            challenge, user, password, method, &uri, &cnonce, nc,
+        ))
     }
 
     fn url_for_dir(&self, logical: &str) -> Result<String, String> {
@@ -348,7 +448,8 @@ impl DavClient {
         }
     }
 
-    /// Sends a request and returns `(status, body)`.
+    /// Sends a request and returns `(status, body)`, transparently answering a
+    /// Digest challenge once.
     ///
     /// Non-standard methods (PROPFIND/MKCOL/MOVE) cannot go through the
     /// `agent.get()`/`agent.put()` helpers: they need `http::Request` + `agent.run`.
@@ -359,10 +460,44 @@ impl DavClient {
         headers: &[(&str, String)],
         body: Option<&'static str>,
     ) -> Result<(u16, String), String> {
+        match self.send(method, url, headers, body, None)? {
+            Sent::Response(status, text) => Ok((status, text)),
+            Sent::Unauthorized(challenge) => {
+                // Only Digest is worth retrying: Basic and Bearer already sent
+                // everything they had, so re-sending the identical header would be a
+                // wasted round trip AND would mislabel the failure.
+                let answer = if self.digest.is_some() && self.learn_challenge(challenge.as_deref())
+                {
+                    self.auth_header_for(method, url)
+                } else {
+                    None
+                };
+                match answer {
+                    Some(auth) => match self.send(method, url, headers, body, Some(auth))? {
+                        Sent::Response(status, text) => Ok((status, text)),
+                        Sent::Unauthorized(ch) => {
+                            Err(unauthorized_error(method, url, ch.as_deref(), true))
+                        }
+                    },
+                    None => Err(unauthorized_error(method, url, challenge.as_deref(), false)),
+                }
+            }
+        }
+    }
+
+    fn send(
+        &self,
+        method: &str,
+        url: &str,
+        headers: &[(&str, String)],
+        body: Option<&'static str>,
+        digest: Option<String>,
+    ) -> Result<Sent, String> {
         let m = http::Method::from_bytes(method.as_bytes())
             .map_err(|e| format!("méthode HTTP invalide '{method}': {e}"))?;
         let mut builder = http::Request::builder().method(m).uri(url);
-        if let Some(a) = &self.auth {
+        let auth = digest.or_else(|| self.auth_header_for(method, url));
+        if let Some(a) = &auth {
             builder = builder.header(http::header::AUTHORIZATION, a);
         }
         for (k, v) in headers {
@@ -388,18 +523,13 @@ impl DavClient {
             Ok(r) => r,
             // Belt and braces: even with max_redirects_will_error(false) set, treat a
             // redirect error as an unknown 3xx so the collection retry still fires.
-            Err(ureq::Error::TooManyRedirects) => return Ok((301, String::new())),
+            Err(ureq::Error::TooManyRedirects) => return Ok(Sent::Response(301, String::new())),
             Err(e) => return Err(format!("WebDAV {method} {url}: {e}")),
         };
 
         let status = res.status().as_u16();
         if status == 401 {
-            let challenge = res
-                .headers()
-                .get("www-authenticate")
-                .and_then(|v| v.to_str().ok())
-                .map(str::to_string);
-            return Err(unauthorized_error(method, url, challenge.as_deref()));
+            return Ok(Sent::Unauthorized(challenge_of(&res)));
         }
         let text = res
             .body_mut()
@@ -407,7 +537,7 @@ impl DavClient {
             .limit(MAX_BODY)
             .read_to_string()
             .unwrap_or_default();
-        Ok((status, text))
+        Ok(Sent::Response(status, text))
     }
 
     /// Issues `method` against the resource form, then retries ONCE against the
@@ -500,6 +630,12 @@ impl WebDavBackend {
                 agent: build_agent(cfg.insecure_tls),
                 base,
                 auth: cfg.auth.header_value(),
+                digest: cfg
+                    .auth
+                    .digest_credentials()
+                    .map(|(u, p)| (u.to_string(), p.to_string())),
+                nonce_count: std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0)),
+                challenge: std::sync::Arc::new(std::sync::Mutex::new(None)),
             },
             base_path_decoded,
         };
@@ -543,28 +679,54 @@ impl WebDavBackend {
         let len = file.metadata().map(|m| m.len()).unwrap_or(0);
         let url = client.url_for_file(logical)?;
 
-        let mut reader = ProgressReader::new(std::io::BufReader::new(file), progress);
-        let mut builder = http::Request::builder()
-            .method(http::Method::PUT)
-            .uri(&url)
-            // SendBody::from_reader would otherwise use Transfer-Encoding: chunked,
-            // which several WebDAV servers reject on PUT. ureq honours an explicit
-            // Content-Length.
-            .header(http::header::CONTENT_LENGTH, len.to_string())
-            .header(http::header::CONTENT_TYPE, "application/octet-stream");
-        if let Some(a) = &client.auth {
-            builder = builder.header(http::header::AUTHORIZATION, a);
-        }
-        let req = builder
-            .body(ureq::SendBody::from_reader(&mut reader))
-            .map_err(|e| format!("requête PUT invalide: {e}"))?;
+        // The body is a reader, so a rejected attempt cannot be replayed as-is: the
+        // file has to be re-opened. Hence the closure, used at most twice.
+        let attempt = |file: std::fs::File,
+                       progress: &mut ByteProgress|
+         -> Result<http::Response<ureq::Body>, String> {
+            let mut reader = ProgressReader::new(std::io::BufReader::new(file), progress);
+            let mut builder = http::Request::builder()
+                .method(http::Method::PUT)
+                .uri(&url)
+                // SendBody::from_reader would otherwise use Transfer-Encoding:
+                // chunked, which several WebDAV servers reject on PUT. ureq honours
+                // an explicit Content-Length.
+                .header(http::header::CONTENT_LENGTH, len.to_string())
+                .header(http::header::CONTENT_TYPE, "application/octet-stream");
+            if let Some(a) = client.auth_header_for("PUT", &url) {
+                builder = builder.header(http::header::AUTHORIZATION, a);
+            }
+            let req = builder
+                .body(ureq::SendBody::from_reader(&mut reader))
+                .map_err(|e| format!("requête PUT invalide: {e}"))?;
+            client
+                .agent
+                .run(req)
+                .map_err(|e| format!("WebDAV PUT '{logical}': {e}"))
+        };
 
-        let res = client
-            .agent
-            .run(req)
-            .map_err(|e| format!("WebDAV PUT '{logical}': {e}"))?;
+        let res = attempt(file, progress)?;
+        let res = if res.status().as_u16() == 401
+            && client.learn_challenge(challenge_of(&res).as_deref())
+        {
+            // First request against a Digest server: re-send with the answer. The
+            // bytes already counted are rewound so the bar does not overshoot.
+            progress.rewind(len);
+            let file = std::fs::File::open(local)
+                .map_err(|e| format!("réouverture {}: {e}", local.display()))?;
+            attempt(file, progress)?
+        } else {
+            res
+        };
+
         match res.status().as_u16() {
             200 | 201 | 204 => Ok(()),
+            401 => Err(unauthorized_error(
+                "PUT",
+                logical,
+                challenge_of(&res).as_deref(),
+                client.digest.is_some(),
+            )),
             s => Err(dav_error("PUT", logical, s)),
         }
     }
@@ -1317,17 +1479,32 @@ mod tests {
             "PROPFIND",
             "/dav/",
             Some(r#"Digest realm="SabreDAV",qop="auth",nonce="6a86ecab",opaque="df58bd""#),
+            false,
         );
         assert!(msg.contains("Digest"), "{msg}");
         assert!(
-            !msg.contains("vérifiez identifiant"),
+            !msg.contains("vérifiez identifiant/mot de passe ou le token"),
             "must not blame the credentials: {msg}"
         );
     }
 
+    /// Having answered the challenge and still being refused is a credential
+    /// problem, and must read as one.
+    #[test]
+    fn a_rejected_digest_answer_blames_the_credentials() {
+        let msg = unauthorized_error(
+            "PROPFIND",
+            "/dav/",
+            Some(r#"Digest realm="SabreDAV",nonce="x""#),
+            true,
+        );
+        assert!(msg.contains("identifiants Digest refusés"), "{msg}");
+        assert!(!msg.contains("choisissez"), "{msg}");
+    }
+
     #[test]
     fn basic_server_blames_the_credentials() {
-        let msg = unauthorized_error("PROPFIND", "/dav/", Some(r#"Basic realm="dav""#));
+        let msg = unauthorized_error("PROPFIND", "/dav/", Some(r#"Basic realm="dav""#), false);
         assert!(msg.contains("vérifiez identifiant"), "{msg}");
         assert!(!msg.contains("Digest"), "{msg}");
     }
@@ -1338,6 +1515,7 @@ mod tests {
             "PROPFIND",
             "/dav/",
             Some(r#"Basic realm="x", Digest realm="x""#),
+            false,
         );
         assert!(msg.contains("vérifiez identifiant"), "{msg}");
         assert!(msg.contains("Digest"), "should still mention it: {msg}");
@@ -1345,7 +1523,7 @@ mod tests {
 
     #[test]
     fn missing_challenge_falls_back_to_the_generic_message() {
-        let msg = unauthorized_error("PROPFIND", "/dav/", None);
+        let msg = unauthorized_error("PROPFIND", "/dav/", None, false);
         assert!(msg.contains("401"), "{msg}");
         assert!(msg.contains("vérifiez identifiant"), "{msg}");
     }

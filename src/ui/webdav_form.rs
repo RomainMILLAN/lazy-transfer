@@ -70,6 +70,7 @@ impl WebDavForm {
     pub fn known_auth_kind(&self) -> Option<char> {
         match self.auth {
             WebDavAuth::Basic { .. } => Some('b'),
+            WebDavAuth::Digest { .. } => Some('d'),
             WebDavAuth::Bearer(_) => Some('t'),
             WebDavAuth::Anonymous => None,
         }
@@ -102,13 +103,20 @@ impl WebDavForm {
 
     pub fn choose_auth(&mut self, key: char) -> WebDavStep {
         match key {
-            'b' => {
-                // Reuse a carried-over Basic password, but never a bearer token.
+            'b' | 'd' => {
+                // Reuse a carried-over user/password pair across Basic<->Digest, but
+                // never a bearer token: that would silently send the token as a
+                // password to a different scheme.
                 let (user, password) = match &self.auth {
-                    WebDavAuth::Basic { user, password } => (user.clone(), password.clone()),
+                    WebDavAuth::Basic { user, password }
+                    | WebDavAuth::Digest { user, password } => (user.clone(), password.clone()),
                     _ => (String::new(), String::new()),
                 };
-                self.auth = WebDavAuth::Basic { user, password };
+                self.auth = if key == 'd' {
+                    WebDavAuth::Digest { user, password }
+                } else {
+                    WebDavAuth::Basic { user, password }
+                };
                 WebDavStep::AskUser
             }
             't' => {
@@ -128,13 +136,21 @@ impl WebDavForm {
     }
 
     pub fn submit_user(&mut self, value: String) -> WebDavStep {
-        let password = match &self.auth {
-            WebDavAuth::Basic { password, .. } => password.clone(),
-            _ => String::new(),
+        let (password, is_digest) = match &self.auth {
+            WebDavAuth::Basic { password, .. } => (password.clone(), false),
+            WebDavAuth::Digest { password, .. } => (password.clone(), true),
+            _ => (String::new(), false),
         };
-        self.auth = WebDavAuth::Basic {
-            user: value,
-            password,
+        self.auth = if is_digest {
+            WebDavAuth::Digest {
+                user: value,
+                password,
+            }
+        } else {
+            WebDavAuth::Basic {
+                user: value,
+                password,
+            }
         };
         WebDavStep::AskPassword
     }
@@ -147,7 +163,11 @@ impl WebDavForm {
         } else {
             value
         };
-        self.auth = WebDavAuth::Basic { user, password };
+        self.auth = if matches!(self.auth, WebDavAuth::Digest { .. }) {
+            WebDavAuth::Digest { user, password }
+        } else {
+            WebDavAuth::Basic { user, password }
+        };
         self.build()
     }
 
@@ -223,6 +243,66 @@ mod tests {
                 password: "pw".to_string()
             }
         );
+    }
+
+    #[test]
+    fn digest_flow() {
+        let mut form = WebDavForm::new();
+        form.submit_url(URL.to_string()).unwrap();
+        assert!(matches!(form.choose_auth('d'), WebDavStep::AskUser));
+        assert!(matches!(
+            form.submit_user("romain".to_string()),
+            WebDavStep::AskPassword
+        ));
+        let conn = connected(form.submit_password("pw".to_string()));
+        assert_eq!(
+            conn.webdav_config().unwrap().auth,
+            WebDavAuth::Digest {
+                user: "romain".to_string(),
+                password: "pw".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn editing_a_digest_connection_keeps_the_scheme_and_secret() {
+        let mut form = WebDavForm::prefilled(
+            URL.to_string(),
+            WebDavAuth::Digest {
+                user: "romain".to_string(),
+                password: "old".to_string(),
+            },
+            false,
+        );
+        assert_eq!(form.known_auth_kind(), Some('d'));
+        form.choose_auth('d');
+        form.submit_user("romain".to_string());
+        let conn = connected(form.submit_password(String::new()));
+        assert_eq!(
+            conn.webdav_config().unwrap().auth,
+            WebDavAuth::Digest {
+                user: "romain".to_string(),
+                password: "old".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn bearer_token_is_never_reused_as_a_digest_password() {
+        let mut form = WebDavForm::prefilled(
+            URL.to_string(),
+            WebDavAuth::Bearer("secret-token".to_string()),
+            false,
+        );
+        form.choose_auth('d');
+        form.submit_user("romain".to_string());
+        let conn = connected(form.submit_password(String::new()));
+        let secret = conn.webdav_config().unwrap().auth.secret().unwrap_or("");
+        assert_ne!(
+            secret, "secret-token",
+            "bearer token leaked into Digest auth"
+        );
+        assert!(secret.is_empty());
     }
 
     #[test]

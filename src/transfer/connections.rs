@@ -83,6 +83,10 @@ impl SavedConnection {
                 user: self.user.clone(),
                 password: self.decoded_password().unwrap_or_default(),
             },
+            "digest" => WebDavAuth::Digest {
+                user: self.user.clone(),
+                password: self.decoded_password().unwrap_or_default(),
+            },
             "bearer" => WebDavAuth::Bearer(self.decoded_password().unwrap_or_default()),
             _ => WebDavAuth::Anonymous,
         }

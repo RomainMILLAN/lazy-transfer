@@ -70,7 +70,17 @@ pub enum AuthMethod {
 /// SSH/SFTP/FTP have no bearer-token notion and must not have to reject one.
 #[derive(Clone, PartialEq, Eq)] // NOT Debug — see the manual impl below.
 pub enum WebDavAuth {
-    Basic { user: String, password: String },
+    Basic {
+        user: String,
+        password: String,
+    },
+    /// HTTP Digest (RFC 7616). Required by SabreDAV-based hosts (BigCommerce among
+    /// them), which advertise no other scheme. Unlike the others it cannot be
+    /// pre-computed into a header: it needs the server's challenge first.
+    Digest {
+        user: String,
+        password: String,
+    },
     Bearer(String),
     Anonymous,
 }
@@ -84,6 +94,11 @@ impl std::fmt::Debug for WebDavAuth {
         match self {
             WebDavAuth::Basic { user, .. } => f
                 .debug_struct("Basic")
+                .field("user", user)
+                .field("password", &"***")
+                .finish(),
+            WebDavAuth::Digest { user, .. } => f
+                .debug_struct("Digest")
                 .field("user", user)
                 .field("password", &"***")
                 .finish(),
@@ -104,7 +119,16 @@ impl WebDavAuth {
                 STANDARD.encode(format!("{user}:{password}"))
             )),
             WebDavAuth::Bearer(token) => Some(format!("Bearer {token}")),
-            WebDavAuth::Anonymous => None,
+            // Digest is challenge-response: there is nothing to send up front.
+            WebDavAuth::Digest { .. } | WebDavAuth::Anonymous => None,
+        }
+    }
+
+    /// Credentials for the Digest exchange, when that is the chosen scheme.
+    pub fn digest_credentials(&self) -> Option<(&str, &str)> {
+        match self {
+            WebDavAuth::Digest { user, password } => Some((user, password)),
+            _ => None,
         }
     }
 
@@ -112,6 +136,7 @@ impl WebDavAuth {
     pub fn as_str(&self) -> &'static str {
         match self {
             WebDavAuth::Basic { .. } => "basic",
+            WebDavAuth::Digest { .. } => "digest",
             WebDavAuth::Bearer(_) => "bearer",
             WebDavAuth::Anonymous => "anonymous",
         }
@@ -120,7 +145,9 @@ impl WebDavAuth {
     /// Password or bearer token — whatever must be persisted (base64) or redacted.
     pub fn secret(&self) -> Option<&str> {
         match self {
-            WebDavAuth::Basic { password, .. } => Some(password),
+            WebDavAuth::Basic { password, .. } | WebDavAuth::Digest { password, .. } => {
+                Some(password)
+            }
             WebDavAuth::Bearer(token) => Some(token),
             WebDavAuth::Anonymous => None,
         }
@@ -128,7 +155,7 @@ impl WebDavAuth {
 
     pub fn user(&self) -> Option<&str> {
         match self {
-            WebDavAuth::Basic { user, .. } => Some(user),
+            WebDavAuth::Basic { user, .. } | WebDavAuth::Digest { user, .. } => Some(user),
             WebDavAuth::Bearer(_) | WebDavAuth::Anonymous => None,
         }
     }

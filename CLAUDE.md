@@ -43,6 +43,7 @@ src/
     runner.rs            # SshRunner implements RemoteBackend (shell out to ssh/scp)
     sftp_backend.rs      # SftpBackend implements RemoteBackend (native ssh2 crate)
     ftp_backend.rs       # FtpBackend implements RemoteBackend (native suppaftp crate)
+    digest_auth.rs       # HTTP Digest (RFC 7616) challenge parsing + response, pure fns
     webdav_backend.rs    # WebDavBackend implements RemoteBackend (ureq + roxmltree)
     ssh_config.rs        # Parse ~/.ssh/config
     connections.rs       # Save/load connections to ~/.config/lazy-transfer/connections.json
@@ -80,6 +81,9 @@ src/
 - **WebDAV collections**: `RemoteBackend::delete`/`rename` do not carry `is_dir`, and Apache `mod_dav` answers 301 for a collection addressed without a trailing slash. Both therefore try the resource form, then retry once as a collection on 301/308/404/409, reporting the **first** status.
 - **WebDAV paths**: the remote panel speaks POSIX paths rooted at `/`, relative to the DAV root; `url_for` translates via `path_segments_mut` (never string concatenation). PROPFIND hrefs are percent-decoded before comparison (encoding is not canonical, decoding is), and the "self" entry is found by path **equality** — never by `strip_prefix`, whose failure would make entries vanish silently.
 - **WebDAV has no POSIX bits**: `FileEntry.permissions` is left empty rather than fabricated.
+- **WebDAV auth**: Basic/Bearer are pre-computed into a header at connect time (`WebDavAuth::header_value`), so the secret never reaches the backend. **Digest** (`digest_auth.rs`, RFC 7616, MD5 + `qop=auth`) cannot be: it is challenge-response. The client therefore **caches the server challenge** — a nonce is reusable, that is what the incrementing `nc` is for — so only the first request pays a 401 round trip, and the streamed PUT can authenticate up front even though its body cannot be replayed. A 401 is retried **only** when Digest is configured; re-sending an identical Basic header would waste a round trip and mislabel the failure. `ByteProgress::rewind` un-counts a replayed PUT body without moving the bar backwards.
+- **401 messages distinguish three cases**: Digest required but not selected ("choose Digest"), a Digest answer refused (bad credentials), and a plain credential failure. Saying "check your password" against a Digest-only server sends the user after the wrong problem.
+- **`dav://` / `davs://`** are accepted as aliases for `http://` / `https://` (the GVFS/Dolphin/Cyberduck spelling).
 
 ## Conventions
 

@@ -1,5 +1,6 @@
 pub mod backend;
 pub mod connections;
+pub mod digest_auth;
 pub mod exec;
 pub mod ftp_backend;
 pub mod ls_parse;
