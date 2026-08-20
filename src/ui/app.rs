@@ -12,8 +12,8 @@ use crossterm::terminal::{
 use ratatui::backend::CrosstermBackend;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Modifier, Style};
-use ratatui::widgets::{Block, Borders, Clear, Widget};
+use ratatui::style::{Modifier, Style};
+use ratatui::widgets::{Block, BorderType, Borders, Clear, Widget};
 use ratatui::Terminal;
 
 use crate::config::Config;
@@ -22,13 +22,17 @@ use crate::transfer::exec::RealExecutor;
 use crate::transfer::runner::SshRunner;
 use crate::transfer::ssh_config::parse_ssh_config;
 use crate::transfer::types::*;
+use crate::ui::brand;
 use crate::ui::components::*;
 use crate::ui::keys::default_key_map;
-use crate::ui::layout::{compute_connection_layout, compute_layout, Layout};
+use crate::ui::layout::{
+    compute_connection_layout, compute_connection_screen, compute_layout, Layout,
+};
 use crate::ui::messages::Action;
-use crate::ui::style::theme;
+use crate::ui::style::{styles, theme};
 use crate::ui::webdav_form::{WebDavForm, WebDavStep};
 
+use super::components::connectionbar;
 use super::components::statusbar::{browser_hints, connection_hints};
 
 // --- Background messages ---
@@ -340,25 +344,23 @@ impl App {
     }
 
     fn render_connection_screen(&self, area: Rect, buf: &mut Buffer) {
-        let status_h = self.layout.status_bar_h;
-        let content_h = area.height.saturating_sub(status_h);
+        let l = compute_connection_screen(area, self.layout.status_bar_h);
 
-        // Center the connection panel
-        let panel_w = 70.min(area.width.saturating_sub(4));
-        let panel_h = content_h.saturating_sub(4);
-        let panel_x = (area.width.saturating_sub(panel_w)) / 2;
-        let panel_y = 2;
+        if let Some((x, y)) = l.brand_at {
+            brand::render(x, y, buf);
+        }
 
-        let panel_area = Rect::new(panel_x, panel_y, panel_w, panel_h);
         self.connection_panel
-            .render(panel_area, buf, self.connecting, self.filtering);
+            .render(l.panel, buf, self.connecting, self.filtering);
+        let (panel_x, panel_y, panel_h) = (l.panel.x, l.panel.y, l.panel.height);
 
-        // Info message
+        // Every message assigned to `info_msg` today is a failure or a refusal,
+        // so this stays red. Introduce a kind on the message before adding a
+        // second style here, rather than a bool that can drift out of sync.
         if let Some(ref msg) = self.info_msg {
             let msg_y = panel_y + panel_h + 1;
             if msg_y < area.height {
-                let style = Style::default().fg(theme::color_danger());
-                buf.set_string(panel_x + 1, msg_y, msg, style);
+                buf.set_string(panel_x + 1, msg_y, msg, styles::error_style());
             }
         }
 
@@ -414,29 +416,11 @@ impl App {
     }
 
     fn render_connection_bar(&self, area: Rect, buf: &mut Buffer) {
-        let bar_bg = if theme::mode() == theme::ThemeMode::Light {
-            Color::Rgb(0xE8, 0xEB, 0xF0)
-        } else {
-            Color::Rgb(0x1A, 0x2A, 0x3A)
-        };
-        let bg = Style::default().fg(theme::color_text()).bg(bar_bg);
-
-        for x in area.x..area.x + area.width {
-            buf.set_string(x, area.y, " ", bg);
-        }
-
-        if let Some(ref conn) = self.connection {
-            let label = format!(
-                " Connection: {} via {} ",
-                conn.label(),
-                conn.protocol().label()
-            );
-            let style = Style::default()
-                .fg(theme::color_primary())
-                .bg(bar_bg)
-                .add_modifier(Modifier::BOLD);
-            buf.set_string(area.x, area.y, &label, style);
-        }
+        let label = self
+            .connection
+            .as_ref()
+            .map(|c| (c.label(), c.protocol().label()));
+        connectionbar::render(area, buf, label.as_ref().map(|(l, p)| (*l, *p)));
     }
 
     fn render_modals(&mut self, area: Rect, buf: &mut Buffer) {
@@ -451,7 +435,9 @@ impl App {
             Clear.render(modal_area, buf);
             let block = Block::default()
                 .title(" Confirm ")
+                .title_style(styles::block_title_style(true))
                 .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
                 .border_style(
                     Style::default()
                         .fg(theme::color_warning())
@@ -460,7 +446,7 @@ impl App {
             let inner = block.inner(modal_area);
             block.render(modal_area, buf);
 
-            let style = Style::default().fg(theme::color_text());
+            let style = styles::description_style();
             // set_string clips at the buffer edge, not the widget edge, so a long
             // message (a deep filename) would otherwise spill past the border.
             let max = inner.width.saturating_sub(2) as usize;
@@ -468,8 +454,7 @@ impl App {
             buf.set_stringn(inner.x + 1, inner.y, &msg, max, style);
 
             let hint = "[y]es / [n]o";
-            let hint_style = Style::default().fg(theme::color_muted());
-            buf.set_string(inner.x + 1, inner.y + 2, hint, hint_style);
+            buf.set_string(inner.x + 1, inner.y + 2, hint, styles::muted_style());
         }
 
         // Choice dialog
@@ -483,7 +468,9 @@ impl App {
             Clear.render(modal_area, buf);
             let block = Block::default()
                 .title(" Choose ")
+                .title_style(styles::block_title_style(true))
                 .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
                 .border_style(Style::default().fg(theme::color_primary()));
             let inner = block.inner(modal_area);
             block.render(modal_area, buf);
@@ -497,7 +484,7 @@ impl App {
                     inner.x + 1,
                     inner.y + i as u16,
                     line,
-                    Style::default().fg(theme::color_text()),
+                    styles::description_style(),
                 );
             }
         }
@@ -1668,10 +1655,6 @@ impl App {
                     self.layout = compute_layout(w, h, false);
                     self.status_bar.set_hints(browser_hints());
 
-                    if let Some(ref conn) = self.connection {
-                        self.status_bar.set_connection_info(conn.label());
-                    }
-
                     self.remote_files.set_dir(&home_dir);
                     self.spawn_load_remote(&home_dir);
                 }
@@ -1684,10 +1667,6 @@ impl App {
                     let (w, h) = crossterm::terminal::size().unwrap_or((120, 40));
                     self.layout = compute_layout(w, h, false);
                     self.status_bar.set_hints(browser_hints());
-
-                    if let Some(ref conn) = self.connection {
-                        self.status_bar.set_connection_info(conn.label());
-                    }
 
                     self.remote_files.set_dir(&home_dir);
                     self.spawn_load_remote(&home_dir);

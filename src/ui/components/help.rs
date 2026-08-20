@@ -3,10 +3,10 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, Widget};
+use ratatui::widgets::{Block, BorderType, Borders, Clear, Widget};
 
 use super::statusbar::Hint;
-use crate::ui::style::theme;
+use crate::ui::style::{styles, theme};
 
 /// HelpSection groups related keybindings.
 pub struct HelpSection {
@@ -75,7 +75,9 @@ impl HelpPopup {
 
         let block = Block::default()
             .title(" Help [j/k: scroll] ")
+            .title_style(styles::block_title_style(true))
             .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
             .border_style(
                 Style::default()
                     .fg(theme::color_primary())

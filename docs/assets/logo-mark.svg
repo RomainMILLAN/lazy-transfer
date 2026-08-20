@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128" fill="none" role="img" aria-label="lazy-transfer">
+  <title>lazy-transfer</title>
+  <!-- Two panes: a rounded frame split by a divider that breaks where the
+       transfer crosses it. Geometry only, so there is no font dependency. -->
+  <rect x="14" y="22" width="100" height="84" rx="18" stroke="#C9D4D6" stroke-width="10"/>
+  <path d="M64 22 V46" stroke="#C9D4D6" stroke-width="10" stroke-linecap="round"/>
+  <path d="M64 82 V106" stroke="#C9D4D6" stroke-width="10" stroke-linecap="round"/>
+  <path d="M36 64 H92" stroke="#2DD4BF" stroke-width="10" stroke-linecap="round"/>
+  <path d="M78 50 L92 64 L78 78" stroke="#2DD4BF" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
