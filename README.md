@@ -7,10 +7,10 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/RomainMILLAN/Lazy-Transfer/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/RomainMILLAN/Lazy-Transfer/ci.yml?branch=main&label=ci&color=0F766E" alt="CI"></a>
-  <a href="https://github.com/RomainMILLAN/Lazy-Transfer/releases"><img src="https://img.shields.io/github/v/release/RomainMILLAN/Lazy-Transfer?color=0F766E" alt="Release"></a>
-  <img src="https://img.shields.io/badge/rust-stable-0F766E" alt="Rust">
-  <a href="LICENSE"><img src="https://img.shields.io/github/license/RomainMILLAN/Lazy-Transfer?color=0F766E" alt="License"></a>
+  <a href="https://github.com/RomainMILLAN/lazy-transfer/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/RomainMILLAN/lazy-transfer/ci.yml?branch=main&label=ci&color=0F766E" alt="CI"></a>
+  <a href="https://github.com/RomainMILLAN/lazy-transfer/releases"><img src="https://img.shields.io/github/v/release/RomainMILLAN/lazy-transfer?include_prereleases&sort=semver&display_name=tag&color=0F766E" alt="Release"></a>
+  <a href="https://www.rust-lang.org"><img src="https://img.shields.io/badge/rust-1.94%2B-0F766E" alt="Rust 1.94+"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/RomainMILLAN/lazy-transfer?color=0F766E" alt="License"></a>
 </p>
 
 <p align="center">
@@ -75,13 +75,13 @@ brew install libssh2
 
 ### From GitHub releases (recommended)
 
-Pre-built binaries are available on the [releases page](https://github.com/RomainMILLAN/Lazy-Transfer/releases).
+Pre-built binaries are available on the [releases page](https://github.com/RomainMILLAN/lazy-transfer/releases).
 
 Download the archive matching your platform, extract it, and move the binary to a directory in your `PATH`:
 
 ```bash
 # Example for Linux x86_64 — adjust the version and asset name as needed
-curl -L https://github.com/RomainMILLAN/Lazy-Transfer/releases/latest/download/lazy-transfer-linux-x86_64.tar.gz \
+curl -L https://github.com/RomainMILLAN/lazy-transfer/releases/latest/download/lazy-transfer-linux-x86_64.tar.gz \
   | tar -xz
 mv lazy-transfer ~/.local/bin/
 ```
@@ -91,8 +91,8 @@ Available assets: `lazy-transfer-linux-x86_64`, `lazy-transfer-linux-aarch64`, `
 ### From source
 
 ```bash
-git clone https://github.com/RomainMILLAN/Lazy-Transfer.git
-cd Lazy-Transfer
+git clone https://github.com/RomainMILLAN/lazy-transfer.git
+cd lazy-transfer
 cargo build --release
 ```
 

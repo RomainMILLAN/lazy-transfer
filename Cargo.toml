@@ -2,6 +2,7 @@
 name = "lazy-transfer"
 version = "0.1.0"
 edition = "2021"
+rust-version = "1.94"
 description = "A TUI dual-pane file manager for remote file transfers over SSH/SCP, SFTP, FTP and WebDAV"
 license = "MIT"
 readme = "README.md"
@@ -24,16 +25,10 @@ chrono = "0.4"
 base64 = "0.22"
 ssh2 = "0.9"
 suppaftp = "6"
-# WebDAV: blocking HTTP client (no tokio) + read-only namespace-aware XML.
-# default-features = false is deliberate: the defaults pull `gzip`, which breaks
-# Content-Length on GET (and thus download progress). rustls/ring avoids any
-# openssl-sys, so there is no conflict with ssh2 / the vendored-openssl feature.
 ureq = { version = "3", default-features = false, features = ["rustls"] }
 roxmltree = "0.20"
 url = "2"
 percent-encoding = "2"
-# WebDAV Digest auth (RFC 7616). MD5 is weak, but it is what the servers
-# requiring Digest (SabreDAV/BigCommerce among them) dictate.
 md-5 = "0.11"
 
 [features]

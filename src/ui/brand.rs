@@ -12,8 +12,8 @@ use crate::ui::style::theme;
 /// SVG logo, at 9x3. The arrow crosses the broken divider at `┼`.
 pub const MARK: [&str; 3] = ["╭───┬───╮", "│ ──┼──▶│", "╰───┴───╯"];
 
-/// Canonical spelling: lowercase, hyphenated. `Lazy-Transfer` is the GitHub
-/// repository name only.
+/// Canonical spelling: lowercase, hyphenated. It is also the GitHub repository
+/// name; `lazy_transfer` is the Rust module path, and nothing else is valid.
 pub const NAME: &str = "lazy-transfer";
 
 pub const TAGLINE: &str = "remote file transfers · two panes · four protocols";

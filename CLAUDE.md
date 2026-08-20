@@ -96,7 +96,7 @@ src/
 - Sort via `s` key -> ChoiceDialog (name/size/date), re-select same column toggles ASC/DESC
 - `h` key is used for "go to parent directory" (like vim), NOT for help
 - `.` toggles hidden files visibility
-- **Naming**: `lazy-transfer` is canonical everywhere (crate, binary, config path, wordmark). `Lazy-Transfer` is the GitHub repository name only, `lazy_transfer` the Rust module path. Never introduce a fourth spelling
+- **Naming**: `lazy-transfer` is canonical everywhere (crate, binary, config path, wordmark, **GitHub repository** — `github.com/RomainMILLAN/lazy-transfer`, all lowercase). `lazy_transfer` is the Rust module path. Never introduce a third spelling — the README badges were broken for exactly that reason
 - Theme: `color_*()` functions from `ui::style::theme`, never hardcoded colors — `theme.rs` is the only file in the tree naming an RGB value, and a test enforces that every text color clears 4.5:1 against both `color_background` and `color_surface` in both modes. `color_accent_dim` is for non-text tones only (it fails contrast as text by design)
 - Reach for a preset in `ui::style::styles` before writing `Style::default().fg(..)` at a call site: `border_style`/`block_title_style`/`selected_style` all take `focused: bool`, so "what does focus look like" has one answer. The panels used to make that decision in ~80 places
 - `ui::brand` owns the product name, the box-drawing mark and the rules for folding them away on a small terminal. Screen geometry lives in `ui::layout` as a value (`compute_connection_screen`) so tests exercise the real arithmetic instead of a copy of it
