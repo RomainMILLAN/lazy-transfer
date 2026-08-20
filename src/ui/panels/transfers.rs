@@ -167,9 +167,13 @@ impl TransfersPanel {
                 ),
             };
 
+            // Fixed-width name column: without it every row's bar and status
+            // start wherever that row's filename happened to end.
+            const NAME_W: usize = 34;
+            let name = crate::ui::text::truncate_ellipsis(&job.file_name, NAME_W);
             let mut spans = vec![
                 Span::styled(
-                    format!(" {} {}", arrow, job.file_name),
+                    format!(" {arrow} {name:<NAME_W$}"),
                     styles::description_style(),
                 ),
                 Span::raw("  "),

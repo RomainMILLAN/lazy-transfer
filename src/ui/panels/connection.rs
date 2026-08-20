@@ -11,6 +11,20 @@ use crate::transfer::types::{Protocol, SshHost};
 use crate::ui::brand;
 use crate::ui::style::{styles, theme};
 
+/// Fills a selected row out to `width`. `set_line` does not pad, and a selected
+/// row is painted with a background, so without this the highlight stops
+/// wherever the text happens to end.
+fn pad_selected(spans: &mut Vec<Span<'static>>, selected: bool, width: u16, style: Style) {
+    if !selected {
+        return;
+    }
+    let used: usize = spans.iter().map(|s| s.content.chars().count()).sum();
+    let pad = (width as usize).saturating_sub(used);
+    if pad > 0 {
+        spans.push(Span::styled(" ".repeat(pad), style));
+    }
+}
+
 /// An entry in the connection list (either SSH host, saved connection, or manual).
 #[derive(Debug, Clone)]
 pub enum ConnectionEntry {
@@ -307,10 +321,12 @@ impl ConnectionPanel {
                         styles::accent_style()
                     };
 
-                    let line = Line::from(vec![
+                    let mut spans = vec![
                         Span::styled(format!(" {:<20}", host.alias), alias_style),
                         Span::styled(format!(" {}", info), style),
-                    ]);
+                    ];
+                    pad_selected(&mut spans, is_selected, inner.width, style);
+                    let line = Line::from(spans);
                     buf.set_line(inner.x, content_y + y as u16, &line, inner.width);
                 }
                 ConnectionEntry::Saved(idx) => {
@@ -347,11 +363,18 @@ impl ConnectionPanel {
                         styles::accent_style()
                     };
 
-                    let line = Line::from(vec![
+                    let badge_style = if is_selected {
+                        style
+                    } else {
+                        styles::badge_style()
+                    };
+                    let mut spans = vec![
                         Span::styled(format!(" {:<20}", saved.name), name_style),
                         Span::styled(format!(" {} ", info), style),
-                        Span::styled(badge, styles::badge_style()),
-                    ]);
+                        Span::styled(badge, badge_style),
+                    ];
+                    pad_selected(&mut spans, is_selected, inner.width, style);
+                    let line = Line::from(spans);
                     buf.set_line(inner.x, content_y + y as u16, &line, inner.width);
                 }
                 ConnectionEntry::Manual => {
@@ -360,7 +383,9 @@ impl ConnectionPanel {
                     } else {
                         Style::default().fg(theme::color_info())
                     };
-                    let line = Line::from(Span::styled(" [+] Manual connection...", style));
+                    let mut spans = vec![Span::styled(" [+] Manual connection...", style)];
+                    pad_selected(&mut spans, is_selected, inner.width, style);
+                    let line = Line::from(spans);
                     buf.set_line(inner.x, content_y + y as u16, &line, inner.width);
                 }
             }

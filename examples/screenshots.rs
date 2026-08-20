@@ -5,6 +5,11 @@
 //! the same `theme::color_*` functions the application draws with, so a palette
 //! change shows up here without anyone redrawing anything by hand.
 //!
+//! One known cosmetic limit: the webfont's `│` does not quite fill its line box,
+//! so long vertical rules show hairline seams in the PNGs. That is this HTML
+//! approximation of a terminal grid, not the application — a real terminal
+//! abuts cells exactly.
+//!
 //! ```text
 //! cargo run --example screenshots
 //! bash docs/assets/src/render.sh
@@ -17,6 +22,7 @@ use lazy_transfer::transfer::types::{
     FileEntry, SshHost, TransferDirection, TransferJob, TransferStatus,
 };
 use lazy_transfer::ui::brand;
+use lazy_transfer::ui::components::connectionbar;
 use lazy_transfer::ui::components::statusbar::{browser_hints, connection_hints, StatusBar};
 use lazy_transfer::ui::layout::{compute_connection_screen, compute_layout};
 use lazy_transfer::ui::panels::connection::ConnectionPanel;
@@ -28,8 +34,12 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier};
 
-const CELL_W: f32 = 8.4;
-const CELL_H: f32 = 18.62;
+const FONT_PX: f32 = 15.0;
+const CELL_W: f32 = 9.0;
+// JetBrains Mono draws its box-drawing glyphs across the full 1.32em line box —
+// 19.8px at 15px. Rows shorter than that make consecutive vertical rules
+// overlap; rows taller leave a hairline gap in every border.
+const CELL_H: f32 = 18.4;
 
 fn dir(name: &str, modified: &str) -> FileEntry {
     FileEntry {
@@ -154,17 +164,10 @@ fn browser_screen(width: u16, height: u16) -> Buffer {
     ];
 
     let mut y = 0;
-    // Connection bar: drawn here rather than reached through `App`, which owns a
-    // live backend. Everything below it is the real widget.
-    let bar_style = lazy_transfer::ui::style::styles::bar_style();
-    for x in 0..width {
-        buf.set_string(x, y, " ", bar_style);
-    }
-    buf.set_string(
-        1,
-        y,
-        " Connection: nas-backup via SFTP ",
-        lazy_transfer::ui::style::styles::accent_style().bg(theme::color_surface()),
+    connectionbar::render(
+        Rect::new(0, y, width, l.connection_bar_h),
+        &mut buf,
+        Some(("nas-backup", "SFTP")),
     );
     y += l.connection_bar_h;
 
@@ -256,7 +259,7 @@ fn to_html(buf: &Buffer, title: &str) -> String {
     width: {w}px; height: {h}px; overflow: hidden;
     background: {page_bg}; color: {page_fg};
     font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
-    font-size: 14px; line-height: {CELL_H}px;
+    font-size: {FONT_PX}px; line-height: {CELL_H}px;
     -webkit-font-smoothing: antialiased;
   }}
   .row {{ white-space: pre; height: {CELL_H}px; }}
@@ -274,7 +277,7 @@ fn main() -> std::io::Result<()> {
         let name = format!("screenshot-connection-{suffix}");
         fs::write(
             format!("docs/assets/src/{name}.html"),
-            to_html(&connection_screen(100, 20), &name),
+            to_html(&connection_screen(100, 24), &name),
         )?;
         println!("wrote docs/assets/src/{name}.html");
 

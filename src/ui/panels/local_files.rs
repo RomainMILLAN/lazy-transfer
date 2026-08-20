@@ -376,12 +376,22 @@ impl LocalFilesPanel {
                 styles::muted_style()
             };
 
-            let line = Line::from(vec![
+            let mut spans = vec![
                 Span::styled(format!(" {} ", icon), icon_style),
                 Span::styled(format!("{:<width$}", name_display, width = name_w), style),
                 Span::styled(format!(" {:>8}", size_str), style),
                 Span::styled(format!("  {:>16}", date_str), date_style),
-            ]);
+            ];
+            // `set_line` does not pad, and a selected row is painted with a
+            // background: without this the highlight stops mid-row.
+            if is_selected {
+                let used: usize = spans.iter().map(|s| s.content.chars().count()).sum();
+                let pad = (inner.width as usize).saturating_sub(used);
+                if pad > 0 {
+                    spans.push(Span::styled(" ".repeat(pad), style));
+                }
+            }
+            let line = Line::from(spans);
             buf.set_line(inner.x, y, &line, inner.width);
         }
     }

@@ -1,48 +1,59 @@
 <p align="center">
-  <svg width="120" height="120" viewBox="0 0 120 120" xmlns="http://www.w3.org/2000/svg">
-    <rect x="20" y="25" width="80" height="70" rx="8" fill="none" stroke="#E0E0E0" stroke-width="4"/>
-    <path d="M20 45 L50 45 L60 35 L80 35" fill="none" stroke="#E0E0E0" stroke-width="4" stroke-linecap="round"/>
-    <path d="M30 25 L30 20 Q30 10 40 10 L80 10 Q90 10 90 20 L90 25" fill="none" stroke="#E0E0E0" stroke-width="4"/>
-    <path d="M45 65 L60 80 L75 65" fill="none" stroke="#50FA7B" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
-    <path d="M45 55 L75 55" stroke="#50FA7B" stroke-width="4" stroke-linecap="round"/>
-    <path d="M75 75 L75 55" stroke="#50FA7B" stroke-width="4" stroke-linecap="round"/>
-    <path d="M75 55 L45 55 L45 75 L75 75" fill="none" stroke="#FFB86C" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="4 2"/>
-  </svg>
-</p>
-
-<h1 align="center">Lazy-Transfer</h1>
-
-<p align="center">
-  A terminal user interface (TUI) dual-pane file manager for remote file transfers, inspired by <a href="https://github.com/jesseduffield/lazygit">lazygit</a>.
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/banner-dark.png">
+    <source media="(prefers-color-scheme: light)" srcset="docs/assets/banner-light.png">
+    <img src="docs/assets/banner-dark.png" alt="lazy-transfer — remote file transfers in your terminal" width="880">
+  </picture>
 </p>
 
 <p align="center">
-  <strong>Beta</strong> — This project is under active development. Expect rough edges and breaking changes.
+  <a href="https://github.com/RomainMILLAN/Lazy-Transfer/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/RomainMILLAN/Lazy-Transfer/ci.yml?branch=main&label=ci&color=0F766E" alt="CI"></a>
+  <a href="https://github.com/RomainMILLAN/Lazy-Transfer/releases"><img src="https://img.shields.io/github/v/release/RomainMILLAN/Lazy-Transfer?color=0F766E" alt="Release"></a>
+  <img src="https://img.shields.io/badge/rust-stable-0F766E" alt="Rust">
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/RomainMILLAN/Lazy-Transfer?color=0F766E" alt="License"></a>
 </p>
 
 <p align="center">
-  Built with <a href="https://ratatui.rs">ratatui</a> + <a href="https://github.com/crossterm-rs/crossterm">crossterm</a>.
+  A dual-pane file manager for your terminal, over SSH/SCP, SFTP, FTP and WebDAV.<br>
+  Built with <a href="https://ratatui.rs">ratatui</a> + <a href="https://github.com/crossterm-rs/crossterm">crossterm</a>, in the spirit of <a href="https://github.com/jesseduffield/lazygit">lazygit</a>.
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/rust-stable-orange" alt="Rust">
-  <img src="https://img.shields.io/github/v/release/RomainMILLAN/Lazy-Transfer" alt="Release">
-  <img src="https://img.shields.io/github/license/RomainMILLAN/Lazy-Transfer" alt="License">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/screenshot-browser-dark.png">
+    <source media="(prefers-color-scheme: light)" srcset="docs/assets/screenshot-browser-light.png">
+    <img src="docs/assets/screenshot-browser-dark.png" alt="Local and remote panes side by side, with a transfer queue below" width="880">
+  </picture>
+</p>
+
+<p align="center">
+  <sub><strong>Beta.</strong> Under active development — expect rough edges and breaking changes.</sub>
 </p>
 
 ## Features
 
-- **SSH/SCP** — Connect via SSH and transfer files using scp with tar for directories
-- **SFTP** — Native SFTP support via libssh2 for efficient file operations
-- **FTP** — FTP support for legacy servers with recursive transfers
-- **WebDAV** — Nextcloud/ownCloud, Synology, Apache `mod_dav` and SabreDAV hosts
-  (BigCommerce), over HTTP or HTTPS, with Basic, Digest, Bearer or anonymous auth
-- **Dual-pane navigation** — Browse local and remote files side by side
-- **File operations** — Upload, download, mkdir, delete, rename, and more
-- **Progress tracking** — Real-time progress bars for all transfers
-- **Inline search** — Filter any list with `/` (fuzzy matching)
-- **Light/Dark theme** — Auto-detects terminal background, toggle with `Ctrl+L`
-- **Saved connections** — Store and reuse connection configurations
+| | SSH/SCP | SFTP | FTP | WebDAV |
+|---|:---:|:---:|:---:|:---:|
+| Browse, upload, download | ● | ● | ● | ● |
+| mkdir, delete, rename | ● | ● | ● | ● |
+| Recursive directory transfers | ● (tar) | ● | ● | ● |
+| Streams without buffering in RAM | ● | ● | | ● |
+| Concurrent transfers | ● | | | ● |
+| Reads `~/.ssh/config` | ● | | | |
+
+- **Dual-pane navigation** — local and remote side by side, `tab` to switch
+- **Progress tracking** — live progress bars, a transfer queue you can cancel
+- **Inline search** — `/` fuzzy-filters any list; no modal dialog
+- **Light/dark theme** — auto-detected from the terminal, `Ctrl+L` to toggle
+- **Saved connections** — stored in `~/.config/lazy-transfer/connections.json`, mode `0600`
+- **Non-blocking** — every transfer runs on a background thread, so the UI never freezes
+
+Per-protocol notes:
+
+- **SSH/SCP** — shells out to `ssh`/`scp` with `ControlMaster`, so a session is reused across commands. Directories go over as a tar stream.
+- **SFTP** — native, via `libssh2`. Keeps one session open, which SFTP-only servers require.
+- **FTP** — for legacy servers. Directory transfers walk recursively, since there is no tar to lean on. Downloads are read into memory before being written out, so a very large file needs the RAM to match.
+- **WebDAV** — Nextcloud/ownCloud, Synology, Apache `mod_dav` and SabreDAV hosts (BigCommerce), over HTTP or HTTPS, with Basic, Digest, Bearer or anonymous auth. Self-signed certificates are refused once, then accepted per connection if you opt in. Its HTTP client needs no lock, so several transfers really do run at once.
 
 ## Prerequisites
 
@@ -119,7 +130,16 @@ lazy-transfer --protocol ftp --host ftp.example.com --user admin
 lazy-transfer --light
 ```
 
-On first launch, a connection screen appears where you can select the protocol (SSH/SFTP/FTP/WebDAV), enter host and credentials, or choose from saved connections.
+On first launch you land on the connection screen: pick a protocol with `1`–`4`, and
+choose an entry from `~/.ssh/config`, a saved connection, or `[+] Manual connection`.
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/screenshot-connection-dark.png">
+    <source media="(prefers-color-scheme: light)" srcset="docs/assets/screenshot-connection-light.png">
+    <img src="docs/assets/screenshot-connection-dark.png" alt="The connection screen, with protocol tabs and hosts read from ~/.ssh/config" width="760">
+  </picture>
+</p>
 
 For WebDAV you enter a single **collection URL** — for example
 `https://cloud.example.com/remote.php/dav/files/alice/` for Nextcloud — and then pick
@@ -232,6 +252,21 @@ cargo clippy            # Lint
 
 Debug logs are written to `~/.local/state/lazy-transfer/debug.log`.
 
+### Regenerating the artwork
+
+The banners and the terminal captures in this README are generated, not drawn by
+hand. The captures render the real widgets into a ratatui buffer and dump it as
+HTML, so a palette change in `src/ui/style/theme.rs` shows up in them without
+anyone editing an image.
+
+```bash
+cargo run --example screenshots   # rewrites the HTML sources
+bash docs/assets/src/render.sh    # rasterises everything to docs/assets/*.png
+```
+
+`render.sh` needs a Chrome/Chromium on `PATH` and network access, for the two
+webfonts. `docs/assets/logo-mark.svg` carries no text and therefore stays vector.
+
 ## Architecture
 
 ```
@@ -255,8 +290,10 @@ src/
     │   ├── local_files.rs # Local file browser
     │   ├── remote_files.rs # Remote file browser
     │   └── transfers.rs   # Transfer queue with progress
-    ├── components/     # ConfirmDialog, InputBox, ChoiceDialog...
-    └── style/          # Theme system (dark/light)
+    ├── brand.rs        # The mark, wordmark and their fold-away rules
+    ├── layout.rs       # Panel geometry, including the connection screen
+    ├── components/     # ConfirmDialog, InputBox, ChoiceDialog, StatusBar...
+    └── style/          # theme.rs (the only file naming a color) + style presets
 ```
 
 All file operations run in background threads with `mpsc` channels, keeping the UI responsive. Progress updates stream back to the UI in real-time.

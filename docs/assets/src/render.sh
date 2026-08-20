@@ -40,7 +40,7 @@ render social-preview 1280 640
 
 # Terminal captures. Regenerate their HTML first:
 #   cargo run --example screenshots
-render screenshot-connection-dark 840 373
-render screenshot-connection-light 840 373
-render screenshot-browser-dark 1008 522
-render screenshot-browser-light 1008 522
+render screenshot-connection-dark 900 442
+render screenshot-connection-light 900 442
+render screenshot-browser-dark 1080 516
+render screenshot-browser-light 1080 516
