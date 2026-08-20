@@ -1,0 +1,13 @@
+# The single definition of "how do we build for another architecture".
+# It used to live inline in .github/workflows/release.yml, which meant a local
+# reproduction of a CI failure was a copy of the truth rather than the truth.
+# CI now installs the toolchain packages and calls `cargo build --target …`;
+# this file supplies the rest, on the runner and on a laptop alike.
+[target.aarch64-unknown-linux-gnu]
+linker = "aarch64-linux-gnu-gcc"
+
+# `cc` and `openssl-src` read these, so the `linker` key above cannot cover
+# them: --features vendored-openssl compiles OpenSSL and zlib from C sources.
+[env]
+CC_aarch64_unknown_linux_gnu = "aarch64-linux-gnu-gcc"
+AR_aarch64_unknown_linux_gnu = "aarch64-linux-gnu-ar"

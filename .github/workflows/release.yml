@@ -2,14 +2,43 @@ name: Release
 
 on:
   push:
-    tags: ["v*"]
+    # Both spellings on purpose: the repository already carries a `0.2.0` tag,
+    # and a `v*`-only trigger is exactly why it never produced a release.
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+*"
+      - "[0-9]+.[0-9]+.[0-9]+*"
+  # The rehearsal room. Without this the pipeline could only ever be tested by
+  # burning a version number, since a pushed tag is not something you take back.
+  workflow_dispatch:
 
-permissions:
-  contents: write
+env:
+  CARGO_TERM_COLOR: always
 
 jobs:
+  # Runs on every trigger, including workflow_dispatch. A job-level `if:` here
+  # would skip it off-tag, and a skipped `needs:` skips its dependents — the
+  # rehearsal room with the door locked. So the *step* carries the condition.
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Tag matches Cargo.toml version
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          CARGO_VERSION=$(cargo metadata --format-version 1 --no-deps \
+            | jq -r '.packages[0].version')
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          if [ "$CARGO_VERSION" != "$TAG_VERSION" ]; then
+            echo "::error::tag $GITHUB_REF_NAME declares $TAG_VERSION, Cargo.toml says $CARGO_VERSION"
+            exit 1
+          fi
+          echo "tag $GITHUB_REF_NAME matches Cargo.toml $CARGO_VERSION"
+
   build:
+    needs: verify
     strategy:
+      fail-fast: false
       matrix:
         include:
           - target: x86_64-unknown-linux-gnu
@@ -19,7 +48,7 @@ jobs:
             os: ubuntu-latest
             name: lazy-transfer-linux-aarch64
           - target: x86_64-apple-darwin
-            os: macos-13
+            os: macos-15-intel
             name: lazy-transfer-macos-x86_64
           - target: aarch64-apple-darwin
             os: macos-latest
@@ -28,45 +57,58 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
 
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
       - name: Install cross-compilation tools
         if: matrix.target == 'aarch64-unknown-linux-gnu'
         run: sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu
 
+      # Linker, CC and AR come from .cargo/config.toml, so this command is
+      # reproducible verbatim on a laptop.
       - name: Build
-        env:
-          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
-          CC_aarch64_unknown_linux_gnu: aarch64-linux-gnu-gcc
-          AR_aarch64_unknown_linux_gnu: aarch64-linux-gnu-ar
-        run: cargo build --release --target ${{ matrix.target }} --features vendored-openssl
+        run: cargo build --release --locked --target ${{ matrix.target }} --features vendored-openssl
 
+      # LICENSE ships with the binary: MIT requires the notice to travel with
+      # the distribution, and a binary archive is a distribution.
       - name: Package
         run: |
-          cd target/${{ matrix.target }}/release
-          tar czf ../../../${{ matrix.name }}.tar.gz lazy-transfer
-          cd ../../..
+          cp LICENSE target/${{ matrix.target }}/release/
+          tar czf ${{ matrix.name }}.tar.gz \
+            -C target/${{ matrix.target }}/release lazy-transfer LICENSE
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.name }}
           path: ${{ matrix.name }}.tar.gz
 
   release:
     needs: build
+    if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
+    # Only this job writes to the repository.
+    permissions:
+      contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           merge-multiple: true
 
+      - name: Checksums
+        run: sha256sum *.tar.gz | tee SHA256SUMS
+
       - name: Create release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
-          files: "*.tar.gz"
+          files: |
+            *.tar.gz
+            SHA256SUMS
           generate_release_notes: true
