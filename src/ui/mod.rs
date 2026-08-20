@@ -1,4 +1,5 @@
 pub mod app;
+pub mod brand;
 pub mod components;
 pub mod keys;
 pub mod layout;

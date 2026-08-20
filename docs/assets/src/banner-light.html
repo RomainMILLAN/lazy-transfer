@@ -1,0 +1,38 @@
+<!doctype html>
+<meta charset="utf-8">
+<!-- Source for banner-light.png. Regenerate with docs/assets/src/render.sh -->
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+  *, *::before, *::after { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    width: 1280px; height: 320px; overflow: hidden;
+    background: #FFFFFF; color: #1A2224;
+    font-family: "Space Grotesk", ui-sans-serif, system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .mono { font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace; }
+</style>
+<div style="width: 1280px; height: 320px; box-sizing: border-box; display: flex; align-items: stretch;">
+  <div style="flex: 1 1 auto; min-width: 0; padding: 56px 0 56px 72px; display: flex; flex-direction: column; justify-content: center; gap: 20px;">
+    <div style="display: flex; align-items: center; gap: 22px;">
+    <svg width="72" height="72" viewBox="0 0 128 128" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <rect x="14" y="22" width="100" height="84" rx="18" stroke="#1A2224" stroke-width="10"/>
+      <path d="M64 22 V46" stroke="#1A2224" stroke-width="10" stroke-linecap="round"/>
+      <path d="M64 82 V106" stroke="#1A2224" stroke-width="10" stroke-linecap="round"/>
+      <path d="M36 64 H92" stroke="#0F766E" stroke-width="10" stroke-linecap="round"/>
+      <path d="M78 50 L92 64 L78 78" stroke="#0F766E" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>
+      <div style="font-size: 54px; font-weight: 600; letter-spacing: -0.03em; color: #000000; line-height: 1;">lazy-transfer</div>
+    </div>
+    <div style="font-size: 20px; line-height: 1.45; max-width: 520px;">Remote file transfers in your terminal.<br><span style="color: #5E6E73;">Two panes, four protocols, no mouse.</span></div>
+  </div>
+  <div style="flex: 0 0 1px; background: #D3DBDC; margin: 56px 0;"></div>
+  <div style="flex: 0 0 400px; padding: 56px 72px 56px 56px; display: flex; flex-direction: column; justify-content: center; gap: 14px;">
+    <div class="mono" style="display: flex; align-items: center; gap: 14px; font-size: 17px;"><span style="color: #0F766E;">&#9656;</span> SSH / SCP</div>
+    <div class="mono" style="display: flex; align-items: center; gap: 14px; font-size: 17px;"><span style="color: #0F766E;">&#9656;</span> SFTP</div>
+    <div class="mono" style="display: flex; align-items: center; gap: 14px; font-size: 17px;"><span style="color: #0F766E;">&#9656;</span> FTP</div>
+    <div class="mono" style="display: flex; align-items: center; gap: 14px; font-size: 17px;"><span style="color: #0F766E;">&#9656;</span> WebDAV</div>
+    <div class="mono" style="margin-top: 12px; font-size: 12px; letter-spacing: 0.06em; color: #5E6E73;">rust &middot; ratatui &middot; crossterm</div>
+  </div>
+</div>

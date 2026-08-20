@@ -1,5 +1,6 @@
 pub mod choice;
 pub mod confirm;
+pub mod connectionbar;
 pub mod help;
 pub mod input;
 pub mod spinner;

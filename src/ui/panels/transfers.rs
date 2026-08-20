@@ -2,10 +2,10 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Widget};
+use ratatui::widgets::{Block, BorderType, Borders, Widget};
 
 use crate::transfer::types::{TransferDirection, TransferJob, TransferStatus};
-use crate::ui::style::theme;
+use crate::ui::style::{styles, theme};
 
 /// TransfersPanel shows the transfer queue with progress bars.
 pub struct TransfersPanel {
@@ -102,14 +102,15 @@ impl TransfersPanel {
 
         let block = Block::default()
             .title(title)
+            .title_style(styles::block_title_style(active > 0))
             .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
             .border_style(Style::default().fg(border_color));
         let inner = block.inner(area);
         block.render(area, buf);
 
         if self.jobs.is_empty() {
-            let style = Style::default().fg(theme::color_muted());
-            buf.set_string(inner.x + 1, inner.y, "No transfers", style);
+            buf.set_string(inner.x + 1, inner.y, "No transfers", styles::muted_style());
             return;
         }
 
@@ -130,49 +131,53 @@ impl TransfersPanel {
                 TransferDirection::Download => "↓",
             };
 
-            let (status_span, bar_span) = match &job.status {
-                TransferStatus::Queued => (
-                    Span::styled("Queued", Style::default().fg(theme::color_muted())),
-                    Span::raw(""),
-                ),
+            // Width of a rendered bar, so rows without one still line their
+            // status text up with the rows that have one.
+            const BAR_W: usize = 20;
+            let empty_bar = || vec![Span::raw(" ".repeat(BAR_W + 2))];
+
+            let (status_span, bar_spans) = match &job.status {
+                TransferStatus::Queued => {
+                    (Span::styled("Queued", styles::muted_style()), empty_bar())
+                }
                 TransferStatus::InProgress { percent, speed } => {
-                    let bar = render_progress_bar(*percent, 20);
+                    let (filled, empty) = progress_bar_parts(*percent, BAR_W);
                     (
-                        Span::styled(
-                            format!("{}% {}", percent, speed),
-                            Style::default().fg(theme::color_warning()),
-                        ),
-                        Span::styled(bar, Style::default().fg(theme::color_primary())),
+                        Span::styled(format!("{}% {}", percent, speed), styles::warning_style()),
+                        // The filled run is the accent, the track behind it the
+                        // dimmed accent — the only non-text use of that token.
+                        vec![
+                            Span::styled("[", styles::muted_style()),
+                            Span::styled(filled, Style::default().fg(theme::color_primary())),
+                            Span::styled(empty, Style::default().fg(theme::color_accent_dim())),
+                            Span::styled("]", styles::muted_style()),
+                        ],
                     )
                 }
                 TransferStatus::Completed => (
                     Span::styled(
                         "Complete",
-                        Style::default()
-                            .fg(theme::color_success())
-                            .add_modifier(Modifier::BOLD),
+                        styles::success_style().add_modifier(Modifier::BOLD),
                     ),
-                    Span::raw(""),
+                    empty_bar(),
                 ),
                 TransferStatus::Failed(err) => (
-                    Span::styled(
-                        format!("Error: {}", err),
-                        Style::default().fg(theme::color_danger()),
-                    ),
-                    Span::raw(""),
+                    Span::styled(format!("Error: {}", err), styles::error_style()),
+                    empty_bar(),
                 ),
             };
 
-            let line = Line::from(vec![
+            let mut spans = vec![
                 Span::styled(
                     format!(" {} {}", arrow, job.file_name),
-                    Style::default().fg(theme::color_text()),
+                    styles::description_style(),
                 ),
                 Span::raw("  "),
-                bar_span,
-                Span::raw(" "),
-                status_span,
-            ]);
+            ];
+            spans.extend(bar_spans);
+            spans.push(Span::raw(" "));
+            spans.push(status_span);
+            let line = Line::from(spans);
             buf.set_line(inner.x, y, &line, inner.width);
         }
 
@@ -184,40 +189,53 @@ impl TransfersPanel {
                 (self.scroll + visible_h).min(total),
                 total
             );
-            let ind_style = Style::default().fg(theme::color_muted());
+            let ind_style = styles::muted_style();
             let x = inner.x + inner.width.saturating_sub(indicator.len() as u16 + 1);
             buf.set_string(x, area.y, &indicator, ind_style);
         }
     }
 }
 
-/// Render a text-based progress bar of given width.
-fn render_progress_bar(percent: u8, width: usize) -> String {
+/// The filled run and the track of a progress bar, as separate strings so the
+/// renderer can style them differently. This is the only place the bar glyphs
+/// are written down.
+fn progress_bar_parts(percent: u8, width: usize) -> (String, String) {
     let filled = (percent as usize * width) / 100;
     let empty = width.saturating_sub(filled);
-    format!("[{}{}]", "━".repeat(filled), "░".repeat(empty))
+    ("━".repeat(filled), "░".repeat(empty))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    /// The fill and the track are rendered as separate spans, so they are
+    /// asserted separately; together they always span the full width.
     #[test]
     fn progress_bar_0_percent() {
-        let bar = render_progress_bar(0, 10);
-        assert_eq!(bar, "[░░░░░░░░░░]");
+        assert_eq!(progress_bar_parts(0, 10), (String::new(), "░".repeat(10)));
     }
 
     #[test]
     fn progress_bar_50_percent() {
-        let bar = render_progress_bar(50, 10);
-        assert_eq!(bar, "[━━━━━░░░░░]");
+        assert_eq!(progress_bar_parts(50, 10), ("━".repeat(5), "░".repeat(5)));
     }
 
     #[test]
     fn progress_bar_100_percent() {
-        let bar = render_progress_bar(100, 10);
-        assert_eq!(bar, "[━━━━━━━━━━]");
+        assert_eq!(progress_bar_parts(100, 10), ("━".repeat(10), String::new()));
+    }
+
+    #[test]
+    fn progress_bar_always_spans_the_full_width() {
+        for percent in 0..=100u8 {
+            let (filled, empty) = progress_bar_parts(percent, 20);
+            assert_eq!(
+                filled.chars().count() + empty.chars().count(),
+                20,
+                "at {percent}%"
+            );
+        }
     }
 
     #[test]

@@ -2,10 +2,10 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
-use ratatui::widgets::{Block, Borders, Clear, Widget};
+use ratatui::widgets::{Block, BorderType, Borders, Clear, Widget};
 
 use crate::ui::messages::Action;
-use crate::ui::style::theme;
+use crate::ui::style::{styles, theme};
 
 /// InputBox is a text input overlay with cursor navigation.
 pub struct InputBox {
@@ -186,7 +186,9 @@ impl InputBox {
 
         let block = Block::default()
             .title(format!(" {} ", self.label))
+            .title_style(styles::block_title_style(true))
             .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
             .border_style(
                 Style::default()
                     .fg(theme::color_primary())

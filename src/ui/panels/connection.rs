@@ -2,13 +2,14 @@ use fuzzy_matcher::skim::SkimMatcherV2;
 use fuzzy_matcher::FuzzyMatcher;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::{Modifier, Style};
+use ratatui::style::Style;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Widget};
+use ratatui::widgets::{Block, BorderType, Borders, Widget};
 
 use crate::transfer::connections::SavedConnection;
 use crate::transfer::types::{Protocol, SshHost};
-use crate::ui::style::theme;
+use crate::ui::brand;
+use crate::ui::style::{styles, theme};
 
 /// An entry in the connection list (either SSH host, saved connection, or manual).
 #[derive(Debug, Clone)]
@@ -211,12 +212,15 @@ impl ConnectionPanel {
     }
 
     pub fn render(&self, area: Rect, buf: &mut Buffer, loading: bool, filtering: bool) {
-        let border_color = theme::color_border_focus();
-
+        // The connection screen is the one screen with a single panel, so it is
+        // always the focused one. Its title carries the product name — the
+        // discreet counterpart to the brand block above it.
         let block = Block::default()
-            .title(" Connections ".to_string())
+            .title(format!(" {} · Connections ", brand::NAME))
+            .title_style(styles::block_title_style(true))
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(border_color));
+            .border_type(BorderType::Rounded)
+            .border_style(styles::border_style(true));
         let inner = block.inner(area);
         block.render(area, buf);
 
@@ -240,20 +244,28 @@ impl ConnectionPanel {
             } else {
                 format!(" /{}", self.filter)
             };
-            let filter_style = Style::default().fg(theme::color_warning());
+            let filter_style = styles::warning_style();
             let fx = inner.x + inner.width.saturating_sub(filter_text.len() as u16 + 1);
             buf.set_string(fx, tab_y, &filter_text, filter_style);
         }
 
         if loading {
-            let style = Style::default().fg(theme::color_primary());
-            buf.set_string(inner.x + 1, content_y, "Connecting...", style);
+            buf.set_string(
+                inner.x + 1,
+                content_y,
+                "Connecting...",
+                styles::accent_style(),
+            );
             return;
         }
 
         if self.filtered.is_empty() {
-            let style = Style::default().fg(theme::color_muted());
-            buf.set_string(inner.x + 1, content_y, "No connections found", style);
+            buf.set_string(
+                inner.x + 1,
+                content_y,
+                "No connections found",
+                styles::muted_style(),
+            );
             return;
         }
 
@@ -285,18 +297,14 @@ impl ConnectionPanel {
                     };
 
                     let style = if is_selected {
-                        Style::default()
-                            .fg(theme::color_bright())
-                            .add_modifier(Modifier::BOLD | Modifier::REVERSED)
+                        styles::selected_style(true)
                     } else {
-                        Style::default().fg(theme::color_text())
+                        styles::description_style()
                     };
                     let alias_style = if is_selected {
                         style
                     } else {
-                        Style::default()
-                            .fg(theme::color_primary())
-                            .add_modifier(Modifier::BOLD)
+                        styles::accent_style()
                     };
 
                     let line = Line::from(vec![
@@ -327,32 +335,28 @@ impl ConnectionPanel {
                     };
 
                     let style = if is_selected {
-                        Style::default()
-                            .fg(theme::color_bright())
-                            .add_modifier(Modifier::BOLD | Modifier::REVERSED)
+                        styles::selected_style(true)
                     } else {
-                        Style::default().fg(theme::color_text())
+                        styles::description_style()
                     };
                     let name_style = if is_selected {
                         style
                     } else {
-                        Style::default()
-                            .fg(theme::color_success())
-                            .add_modifier(Modifier::BOLD)
+                        // Same accent as an SSH alias: both are "a place you can
+                        // connect to". The protocol badge is what tells them apart.
+                        styles::accent_style()
                     };
 
                     let line = Line::from(vec![
                         Span::styled(format!(" {:<20}", saved.name), name_style),
                         Span::styled(format!(" {} ", info), style),
-                        Span::styled(badge, Style::default().fg(theme::color_muted())),
+                        Span::styled(badge, styles::badge_style()),
                     ]);
                     buf.set_line(inner.x, content_y + y as u16, &line, inner.width);
                 }
                 ConnectionEntry::Manual => {
                     let style = if is_selected {
-                        Style::default()
-                            .fg(theme::color_bright())
-                            .add_modifier(Modifier::BOLD | Modifier::REVERSED)
+                        styles::selected_style(true)
                     } else {
                         Style::default().fg(theme::color_info())
                     };
@@ -377,18 +381,14 @@ impl ConnectionPanel {
         for (label, proto) in &tabs {
             let is_active = *proto == self.selected_protocol;
             let style = if is_active {
-                Style::default()
-                    .fg(theme::color_primary())
-                    .add_modifier(Modifier::BOLD)
+                styles::accent_style()
             } else {
-                Style::default().fg(theme::color_muted())
+                styles::muted_style()
             };
 
-            let text = if is_active {
-                format!("[{}]", label)
-            } else {
-                format!(" {} ", label)
-            };
+            // Every tab is bracketed so the strip does not shift as the
+            // selection moves; the accent and the weight carry the state.
+            let text = format!("[{label}]");
 
             if tx + text.len() as u16 > x + width {
                 break;

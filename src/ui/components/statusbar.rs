@@ -1,8 +1,8 @@
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Style};
+use ratatui::style::Style;
 
-use crate::ui::style::theme;
+use crate::ui::style::{styles, theme};
 
 /// Hint is a key/description pair.
 #[derive(Debug, Clone)]
@@ -15,7 +15,6 @@ pub struct Hint {
 pub struct StatusBar {
     pub width: u16,
     pub hints: Vec<Hint>,
-    pub connection_info: String,
     pub loading_msg: String,
 }
 
@@ -25,18 +24,20 @@ impl Default for StatusBar {
     }
 }
 
+/// Terminal columns a string occupies. `str::len()` counts bytes, and the bar
+/// carries `⟳` — three bytes, one column — so byte lengths used to shift
+/// everything after the loading message two columns to the right.
+fn cols(s: &str) -> u16 {
+    s.chars().count() as u16
+}
+
 impl StatusBar {
     pub fn new() -> Self {
         StatusBar {
             width: 0,
             hints: vec![],
-            connection_info: String::new(),
             loading_msg: String::new(),
         }
-    }
-
-    pub fn set_connection_info(&mut self, info: &str) {
-        self.connection_info = info.to_string();
     }
 
     pub fn set_loading(&mut self, msg: &str) {
@@ -52,12 +53,7 @@ impl StatusBar {
     }
 
     pub fn render(&self, area: Rect, buf: &mut Buffer) {
-        let bar_bg = if theme::mode() == theme::ThemeMode::Light {
-            Color::Rgb(0xE0, 0xE0, 0xE0)
-        } else {
-            Color::Rgb(0x1A, 0x1A, 0x1A)
-        };
-        let bg = Style::default().fg(theme::color_text()).bg(bar_bg);
+        let bg = styles::bar_style();
         for x in area.x..area.x + area.width {
             buf.set_string(x, area.y, " ", bg);
         }
@@ -68,115 +64,71 @@ impl StatusBar {
         if !self.loading_msg.is_empty() {
             let msg = format!("⟳ {}", self.loading_msg);
             let style = Style::default()
-                .fg(Color::Rgb(0x00, 0x00, 0x00))
+                .fg(theme::color_background())
                 .bg(theme::color_warning());
             buf.set_string(x, area.y, &msg, style);
-            x += msg.len() as u16 + 2;
+            x += cols(&msg) + 2;
         }
 
-        // Hints
+        // Hints. A hint that would be clipped by the right edge is dropped
+        // whole rather than cut mid-word, which is what a plain `set_string`
+        // does — the bar used to end in things like "q qui".
+        let key_style = styles::key_style().bg(theme::color_surface());
+        let right = area.x + area.width;
         for hint in &self.hints {
-            let key_style = Style::default().fg(theme::color_primary()).bg(bar_bg);
-            buf.set_string(x, area.y, &hint.key, key_style);
-            x += hint.key.len() as u16 + 1;
-            buf.set_string(x, area.y, &hint.desc, bg);
-            x += hint.desc.len() as u16 + 2;
-        }
-
-        // Connection info on the right
-        if !self.connection_info.is_empty() {
-            let info_len = self.connection_info.len() as u16;
-            if area.width > info_len + 2 {
-                let info_x = area.x + area.width - info_len - 1;
-                let info_style = Style::default().fg(theme::color_primary()).bg(bar_bg);
-                buf.set_string(info_x, area.y, &self.connection_info, info_style);
+            let needed = cols(&hint.key) + 1 + cols(&hint.desc);
+            if x + needed > right {
+                break;
             }
+            buf.set_string(x, area.y, &hint.key, key_style);
+            x += cols(&hint.key) + 1;
+            buf.set_string(x, area.y, &hint.desc, bg);
+            x += cols(&hint.desc) + 2;
         }
     }
 }
 
 /// Returns the hints for the connection selection screen.
 pub fn connection_hints() -> Vec<Hint> {
-    vec![
-        Hint {
-            key: "1-4".to_string(),
-            desc: "SSH/SFTP/FTP/DAV".to_string(),
-        },
-        Hint {
-            key: "j/k".to_string(),
-            desc: "navigate".to_string(),
-        },
-        Hint {
-            key: "enter".to_string(),
-            desc: "connect".to_string(),
-        },
-        Hint {
-            key: "e".to_string(),
-            desc: "edit saved".to_string(),
-        },
-        Hint {
-            key: "x".to_string(),
-            desc: "remove saved".to_string(),
-        },
-        Hint {
-            key: "/".to_string(),
-            desc: "filter".to_string(),
-        },
-        Hint {
-            key: "?".to_string(),
-            desc: "help".to_string(),
-        },
-        Hint {
-            key: "q".to_string(),
-            desc: "quit".to_string(),
-        },
-    ]
+    hints(&[
+        ("1-4", "protocol"),
+        ("j/k", "navigate"),
+        ("enter", "connect"),
+        ("e", "edit"),
+        ("x", "remove"),
+        ("/", "filter"),
+        ("?", "help"),
+        ("q", "quit"),
+    ])
 }
 
 /// Returns the hints for the file browser screen.
+///
+/// These keys must match [`crate::ui::keys`] — they used to advertise `c`/`d`/`m`
+/// for copy/delete/mkdir, which is not what the application binds.
 pub fn browser_hints() -> Vec<Hint> {
-    vec![
-        Hint {
-            key: "j/k".to_string(),
-            desc: "navigate".to_string(),
-        },
-        Hint {
-            key: "tab".to_string(),
-            desc: "switch pane".to_string(),
-        },
-        Hint {
-            key: "c".to_string(),
-            desc: "copy".to_string(),
-        },
-        Hint {
-            key: "d".to_string(),
-            desc: "delete".to_string(),
-        },
-        Hint {
-            key: "m".to_string(),
-            desc: "mkdir".to_string(),
-        },
-        Hint {
-            key: "r".to_string(),
-            desc: "rename".to_string(),
-        },
-        Hint {
-            key: "s".to_string(),
-            desc: "sort".to_string(),
-        },
-        Hint {
-            key: "R".to_string(),
-            desc: "refresh".to_string(),
-        },
-        Hint {
-            key: "?".to_string(),
-            desc: "help".to_string(),
-        },
-        Hint {
-            key: "q".to_string(),
-            desc: "quit".to_string(),
-        },
-    ]
+    hints(&[
+        ("j/k", "navigate"),
+        ("tab", "switch pane"),
+        ("u", "upload"),
+        ("d", "download"),
+        ("n", "mkdir"),
+        ("x", "delete"),
+        ("y", "copy"),
+        ("s", "sort"),
+        ("?", "help"),
+        ("q", "quit"),
+    ])
+}
+
+fn hints(pairs: &[(&str, &str)]) -> Vec<Hint> {
+    pairs
+        .iter()
+        .map(|(key, desc)| Hint {
+            key: key.to_string(),
+            desc: desc.to_string(),
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -190,8 +142,54 @@ mod tests {
     }
 
     #[test]
-    fn browser_hints_has_copy() {
+    fn browser_hints_match_the_documented_keybindings() {
         let hints = browser_hints();
-        assert!(hints.iter().any(|h| h.key == "c" && h.desc == "copy"));
+        for (key, desc) in [
+            ("u", "upload"),
+            ("d", "download"),
+            ("n", "mkdir"),
+            ("x", "delete"),
+            ("y", "copy"),
+        ] {
+            assert!(
+                hints.iter().any(|h| h.key == key && h.desc == desc),
+                "missing hint {key} => {desc}"
+            );
+        }
+    }
+
+    /// The bar is one row: whatever does not fit must be dropped whole.
+    #[test]
+    fn hints_are_never_cut_mid_word() {
+        use ratatui::buffer::Buffer;
+        use ratatui::layout::Rect;
+
+        let area = Rect::new(0, 0, 24, 1);
+        let mut buf = Buffer::empty(area);
+        let mut bar = StatusBar::new();
+        bar.set_hints(connection_hints());
+        bar.render(area, &mut buf);
+
+        let row: String = (0..area.width).map(|x| buf[(x, 0)].symbol()).collect();
+        // Every description present must be present in full.
+        for hint in connection_hints() {
+            if let Some(pos) = row.find(&hint.desc) {
+                assert_eq!(
+                    &row[pos..pos + hint.desc.len()],
+                    hint.desc,
+                    "truncated hint in {row:?}"
+                );
+            }
+        }
+        assert!(row.contains("protocol"), "first hint missing from {row:?}");
+        assert!(
+            !row.contains("quit"),
+            "row should not have fitted quit: {row:?}"
+        );
+    }
+
+    #[test]
+    fn cols_counts_columns_not_bytes() {
+        assert_eq!(cols("⟳ Connecting"), 12);
     }
 }

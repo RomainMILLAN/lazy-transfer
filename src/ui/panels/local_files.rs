@@ -2,14 +2,14 @@ use fuzzy_matcher::skim::SkimMatcherV2;
 use fuzzy_matcher::FuzzyMatcher;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::{Modifier, Style};
+use ratatui::style::Style;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Widget};
+use ratatui::widgets::{Block, BorderType, Borders, Widget};
 use std::fs;
 use std::path::Path;
 
 use crate::transfer::types::{FileEntry, SortColumn, SortOrder};
-use crate::ui::style::theme;
+use crate::ui::style::{styles, theme};
 use crate::ui::text::format_size;
 
 /// LocalFilesPanel displays local filesystem contents.
@@ -298,7 +298,9 @@ impl LocalFilesPanel {
                 " Local ({}) [{}]{}{} ",
                 self.current_dir, count_text, sort_text, filter_text
             ))
+            .title_style(styles::block_title_style(is_active))
             .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
             .border_style(Style::default().fg(border_color));
         let inner = block.inner(area);
         block.render(area, buf);
@@ -356,22 +358,14 @@ impl LocalFilesPanel {
                 entry.name.clone()
             };
 
-            let style = if is_selected && is_active {
-                Style::default()
-                    .fg(theme::color_bright())
-                    .add_modifier(Modifier::BOLD | Modifier::REVERSED)
-            } else if is_selected {
-                Style::default()
-                    .fg(theme::color_text())
-                    .add_modifier(Modifier::REVERSED)
+            let style = if is_selected {
+                styles::selected_style(is_active)
             } else {
-                Style::default().fg(theme::color_text())
+                styles::description_style()
             };
 
             let icon_style = if entry.is_dir && !is_selected {
-                Style::default()
-                    .fg(theme::color_info())
-                    .add_modifier(Modifier::BOLD)
+                styles::directory_style()
             } else {
                 style
             };
@@ -379,7 +373,7 @@ impl LocalFilesPanel {
             let date_style = if is_selected {
                 style
             } else {
-                Style::default().fg(theme::color_muted())
+                styles::muted_style()
             };
 
             let line = Line::from(vec![
