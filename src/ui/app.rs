@@ -909,13 +909,23 @@ impl App {
 
     fn handle_mouse(&mut self, mouse: crossterm::event::MouseEvent) {
         match mouse.kind {
-            MouseEventKind::ScrollUp => match self.active_pane {
-                ActivePane::Local => self.local_files.move_up(),
-                ActivePane::Remote => self.remote_files.move_up(),
+            // Routed by screen, the same way `handle_key` dispatches. Without the
+            // screen check the wheel moved the cursor of the local/remote panels
+            // while they were not even on screen, and left the connection list —
+            // the only visible list — untouched.
+            MouseEventKind::ScrollUp => match self.screen {
+                AppScreen::ConnectionSelect => self.connection_panel.move_up(),
+                AppScreen::FileBrowser => match self.active_pane {
+                    ActivePane::Local => self.local_files.move_up(),
+                    ActivePane::Remote => self.remote_files.move_up(),
+                },
             },
-            MouseEventKind::ScrollDown => match self.active_pane {
-                ActivePane::Local => self.local_files.move_down(),
-                ActivePane::Remote => self.remote_files.move_down(),
+            MouseEventKind::ScrollDown => match self.screen {
+                AppScreen::ConnectionSelect => self.connection_panel.move_down(),
+                AppScreen::FileBrowser => match self.active_pane {
+                    ActivePane::Local => self.local_files.move_down(),
+                    ActivePane::Remote => self.remote_files.move_down(),
+                },
             },
             MouseEventKind::Down(MouseButton::Left) if self.screen == AppScreen::FileBrowser => {
                 if mouse.column < self.layout.left_width {
