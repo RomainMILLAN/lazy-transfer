@@ -225,44 +225,50 @@ On subsequent launches, saved connections are available for quick access. Press 
 
 ## Keybindings
 
-### Global
+These tables are the ones in `src/ui/keys.rs`. They used to advertise `u`/`x`/`y`/`N`/`t`
+and `d` for "download" — keys bound to nothing, and `d` in fact **deletes**. If you change
+a binding, change `default_key_map()`: the status bar now derives its hints from it, so it
+cannot drift again, but this file still has to be kept honest by hand.
+
+### File browser
+
+| Key | Action |
+|-----|--------|
+| `j` / `k` or `Down` / `Up` | Navigate down / up |
+| `g` / `G` | Jump to top / bottom |
+| `Tab` | Switch pane (local ↔ remote) |
+| `Enter` | Open directory |
+| `h` / `Backspace` | Go to parent directory |
+| `/` | Filter current list |
+| `Esc` | Clear filter / cancel |
+| `s` | Sort menu (name/size/date), re-pick to flip the direction |
+| `.` | Toggle hidden files |
+| `R` | Refresh current panel |
+| `Ctrl+L` | Toggle light/dark theme |
+| `?` | Show help |
+| `q` | Quit |
+
+### File operations
+
+The active pane decides the direction: there is **one** transfer key, not one per way.
+
+| Key | Action |
+|-----|--------|
+| `c` | Transfer selected item — upload from the local pane, **download** from the remote one |
+| `C` | Same via tar (SSH only; compresses, so it is faster on many small files) |
+| `d` | Delete selected item |
+| `r` | Rename selected item |
+| `m` | Create directory |
+
+### Connection screen
 
 | Key | Action |
 |-----|--------|
 | `1` `2` `3` `4` | Switch protocol tab (SSH / SFTP / FTP / WebDAV) |
-| `Tab` / `Shift+Tab` | Next / previous panel |
-| `j` / `k` or `Up` / `Down` | Navigate up / down |
-| `Enter` | Select / drill-down |
-| `h` | Go to parent directory |
-| `/` | Filter current list |
-| `Esc` | Clear filter / cancel |
-| `s` | Sort menu (name/size/date) |
-| `.` | Toggle hidden files |
-| `R` | Refresh current directory |
-| `Ctrl+L` | Toggle light/dark theme |
-| `?` | Show help |
-| `q` / `Ctrl+C` | Quit |
-
-### File operations
-
-| Key | Action |
-|-----|--------|
-| `u` | Upload selected file(s) to remote |
-| `d` | Download selected file(s) to local |
-| `n` | Create new directory |
-| `N` | Create new file |
-| `r` | Rename selected item |
-| `x` | Delete selected item |
-| `y` | Copy selected item name/path |
-
-### Transfers panel
-
-| Key | Action |
-|-----|--------|
-| `t` | Open transfers panel |
-| `x` | Cancel selected transfer |
-| `j` / `k` | Navigate up / down |
-| `Enter` | View transfer details |
+| `Enter` | Connect |
+| `e` | Edit the selected saved connection |
+| `x` | Delete the selected saved connection |
+| `/` | Filter saved connections |
 
 ## Development
 

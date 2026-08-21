@@ -5,7 +5,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Clear, Widget};
 
-use super::statusbar::Hint;
+use super::hint::Hint;
 use crate::ui::style::{styles, theme};
 
 /// HelpSection groups related keybindings.

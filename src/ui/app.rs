@@ -33,7 +33,7 @@ use crate::ui::style::{styles, theme};
 use crate::ui::webdav_form::{WebDavForm, WebDavStep};
 
 use super::components::connectionbar;
-use super::components::statusbar::{browser_hints, connection_hints};
+use super::components::statusbar::connection_hints;
 
 // --- Background messages ---
 
@@ -1653,7 +1653,7 @@ impl App {
 
                     let (w, h) = crossterm::terminal::size().unwrap_or((120, 40));
                     self.layout = compute_layout(w, h, false);
-                    self.status_bar.set_hints(browser_hints());
+                    self.status_bar.set_hints(default_key_map().browser_hints());
 
                     self.remote_files.set_dir(&home_dir);
                     self.spawn_load_remote(&home_dir);
@@ -1666,7 +1666,7 @@ impl App {
 
                     let (w, h) = crossterm::terminal::size().unwrap_or((120, 40));
                     self.layout = compute_layout(w, h, false);
-                    self.status_bar.set_hints(browser_hints());
+                    self.status_bar.set_hints(default_key_map().browser_hints());
 
                     self.remote_files.set_dir(&home_dir);
                     self.spawn_load_remote(&home_dir);

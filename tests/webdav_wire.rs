@@ -107,6 +107,57 @@ fn handle_with_challenge(stream: &mut TcpStream, challenge: Option<String>) -> O
     })
 }
 
+/// Serves a GET, but ONLY to a request that authenticated: an unauthorized one gets
+/// 401 + `challenge`. Making the server enforce it is what turns this into a real
+/// end-to-end check — a permissive server would happily hand the body to the bare
+/// GET the buggy backend used to send, and the test would pass on broken code.
+fn serve_get(stream: &mut TcpStream, payload: &str, challenge: &str) -> Option<Seen> {
+    let mut reader = BufReader::new(stream.try_clone().ok()?);
+    let mut start = String::new();
+    if reader.read_line(&mut start).ok()? == 0 {
+        return None;
+    }
+    let method = start.split_whitespace().next()?.to_string();
+
+    let mut headers = Vec::new();
+    loop {
+        let mut line = String::new();
+        if reader.read_line(&mut line).ok()? == 0 {
+            break;
+        }
+        let line = line.trim_end();
+        if line.is_empty() {
+            break;
+        }
+        if let Some((k, v)) = line.split_once(':') {
+            headers.push((k.trim().to_ascii_lowercase(), v.trim().to_string()));
+        }
+    }
+
+    let authorized = headers
+        .iter()
+        .any(|(k, v)| k == "authorization" && v.starts_with("Digest "));
+    let response = if authorized {
+        format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            payload.len(),
+            payload
+        )
+    } else {
+        format!(
+            "HTTP/1.1 401 Unauthorized\r\nWWW-Authenticate: {challenge}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+        )
+    };
+    stream.write_all(response.as_bytes()).ok()?;
+    stream.flush().ok()?;
+
+    Some(Seen {
+        method,
+        headers,
+        body_len: 0,
+    })
+}
+
 #[test]
 fn put_sends_content_length_and_never_chunked() {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
@@ -254,6 +305,120 @@ fn digest_auth_completes_the_challenge_response_exchange() {
     assert!(
         auth.contains(&format!(r#"response="{expected}""#)),
         "digest response mismatch\n  got: {auth}\n  want response={expected}"
+    );
+}
+
+/// A GET must authenticate like every other verb.
+///
+/// This is the regression that shipped: `get_file` read the pre-computed
+/// Basic/Bearer header field directly instead of going through the challenge
+/// machinery, and that field is `None` for Digest. Listing, mkdir, rename, delete
+/// and upload all worked; every download came back 401 with a message blaming the
+/// password. The server below REFUSES an unauthenticated GET, so the download only
+/// succeeds if the request really carried the Digest answer — and both halves are
+/// asserted, because "authenticated but wrote nothing" would slip past either one
+/// alone.
+#[test]
+fn digest_download_authenticates_the_get() {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+    let port = listener.local_addr().unwrap().port();
+    let (tx, rx) = mpsc::channel();
+
+    const REALM: &str = "SabreDAV";
+    const NONCE: &str = "6a86ecabd683c";
+    const USER: &str = "alice";
+    const PASSWORD: &str = "s3cret";
+    const PAYLOAD: &str = "downloaded bytes\n";
+
+    let server = thread::spawn(move || {
+        // 1: PROPFIND refused with a challenge. 2: PROPFIND answered. 3: the GET.
+        for i in 0..3 {
+            let (mut stream, _) = match listener.accept() {
+                Ok(v) => v,
+                Err(_) => return,
+            };
+            let seen = if i == 0 {
+                handle_with_challenge(
+                    &mut stream,
+                    Some(format!(
+                        r#"Digest realm="{REALM}",qop="auth",nonce="{NONCE}",opaque="op""#
+                    )),
+                )
+            } else if i == 1 {
+                handle_with_challenge(&mut stream, None)
+            } else {
+                serve_get(
+                    &mut stream,
+                    PAYLOAD,
+                    &format!(r#"Digest realm="{REALM}",qop="auth",nonce="{NONCE}",opaque="op""#),
+                )
+            };
+            if let Some(seen) = seen {
+                let _ = tx.send(seen);
+            }
+        }
+    });
+
+    let cfg = WebDavConfig {
+        url: format!("http://127.0.0.1:{port}/dav/"),
+        auth: WebDavAuth::Digest {
+            user: USER.to_string(),
+            password: PASSWORD.to_string(),
+        },
+        insecure_tls: false,
+    };
+    let backend = WebDavBackend::connect(&cfg).expect("the Digest exchange must succeed");
+
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let local = tmp.path().join("out.txt");
+    let handle = backend
+        .download("/file.txt", local.to_str().unwrap())
+        .expect("download must start");
+    let mut err = None;
+    for line in handle.rx.iter() {
+        if line.done {
+            err = line.err;
+            break;
+        }
+    }
+    let _ = server.join();
+    assert!(err.is_none(), "download failed: {err:?}");
+
+    let reqs: Vec<Seen> = rx.try_iter().collect();
+    assert_eq!(reqs.len(), 3, "expected challenge, PROPFIND, GET");
+    assert_eq!(reqs[2].method, "GET", "the third request must be the GET");
+
+    // The challenge is cached from connect(), so the GET authenticates up front
+    // rather than paying another 401 round trip.
+    let auth = reqs[2]
+        .header("authorization")
+        .expect("the GET must carry an Authorization header");
+    assert!(auth.starts_with("Digest "), "{auth}");
+    assert!(auth.contains(r#"uri="/dav/file.txt""#), "{auth}");
+
+    // The hash must be over GET, not some other verb: the method is part of HA2.
+    let cnonce = auth
+        .split("cnonce=\"")
+        .nth(1)
+        .and_then(|r| r.split('"').next())
+        .expect("cnonce");
+    let nc = auth
+        .split("nc=")
+        .nth(1)
+        .and_then(|r| r.split(',').next())
+        .expect("nc");
+    let ha1 = md5_hex(&format!("{USER}:{REALM}:{PASSWORD}"));
+    let ha2 = md5_hex("GET:/dav/file.txt");
+    let expected = md5_hex(&format!("{ha1}:{NONCE}:{nc}:{cnonce}:auth:{ha2}"));
+    assert!(
+        auth.contains(&format!(r#"response="{expected}""#)),
+        "digest response mismatch\n  got: {auth}\n  want response={expected}"
+    );
+
+    assert_eq!(
+        std::fs::read_to_string(&local).expect("the local file must exist"),
+        PAYLOAD,
+        "the body must reach disk, not just the wire"
     );
 }
 

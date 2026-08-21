@@ -2,14 +2,8 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
 
+use crate::ui::components::Hint;
 use crate::ui::style::{styles, theme};
-
-/// Hint is a key/description pair.
-#[derive(Debug, Clone)]
-pub struct Hint {
-    pub key: String,
-    pub desc: String,
-}
 
 /// StatusBar renders contextual keyboard hints at the bottom.
 pub struct StatusBar {
@@ -89,6 +83,11 @@ impl StatusBar {
 }
 
 /// Returns the hints for the connection selection screen.
+///
+/// These stay a literal list on purpose: `1`-`4`, `e` and `x` are matched directly
+/// in `handle_connection_key`, not through [`crate::ui::keys::KeyMap`], so there is
+/// no binding to ask. The browser hints, which DO have bindings, come from the
+/// keymap instead — see `KeyMap::browser_hints`.
 pub fn connection_hints() -> Vec<Hint> {
     hints(&[
         ("1-4", "protocol"),
@@ -97,25 +96,6 @@ pub fn connection_hints() -> Vec<Hint> {
         ("e", "edit"),
         ("x", "remove"),
         ("/", "filter"),
-        ("?", "help"),
-        ("q", "quit"),
-    ])
-}
-
-/// Returns the hints for the file browser screen.
-///
-/// These keys must match [`crate::ui::keys`] — they used to advertise `c`/`d`/`m`
-/// for copy/delete/mkdir, which is not what the application binds.
-pub fn browser_hints() -> Vec<Hint> {
-    hints(&[
-        ("j/k", "navigate"),
-        ("tab", "switch pane"),
-        ("u", "upload"),
-        ("d", "download"),
-        ("n", "mkdir"),
-        ("x", "delete"),
-        ("y", "copy"),
-        ("s", "sort"),
         ("?", "help"),
         ("q", "quit"),
     ])
@@ -139,23 +119,6 @@ mod tests {
     fn connection_hints_has_quit() {
         let hints = connection_hints();
         assert!(hints.iter().any(|h| h.key == "q"));
-    }
-
-    #[test]
-    fn browser_hints_match_the_documented_keybindings() {
-        let hints = browser_hints();
-        for (key, desc) in [
-            ("u", "upload"),
-            ("d", "download"),
-            ("n", "mkdir"),
-            ("x", "delete"),
-            ("y", "copy"),
-        ] {
-            assert!(
-                hints.iter().any(|h| h.key == key && h.desc == desc),
-                "missing hint {key} => {desc}"
-            );
-        }
     }
 
     /// The bar is one row: whatever does not fit must be dropped whole.

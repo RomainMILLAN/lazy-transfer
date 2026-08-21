@@ -1,10 +1,17 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-/// A keyboard binding with multiple possible keys and help text.
+use crate::ui::components::Hint;
+
+/// A keyboard binding: the keys it answers to, and how it presents itself.
+///
+/// `help_key`/`help_desc` are PRIVATE. Public, every surface recomposed its own
+/// label from the pieces and the duplication merely moved down a level; that is
+/// how the status bar came to advertise `d` for "download" while `d` deleted. Ask
+/// the binding to describe itself with [`KeyBinding::hint`] instead.
 pub struct KeyBinding {
     pub keys: Vec<KeyEvent>,
-    pub help_key: String,
-    pub help_desc: String,
+    help_key: String,
+    help_desc: String,
 }
 
 impl KeyBinding {
@@ -12,6 +19,11 @@ impl KeyBinding {
         self.keys
             .iter()
             .any(|k| k.code == key.code && k.modifiers == key.modifiers)
+    }
+
+    /// The binding presents itself. Nobody else has to glue its pieces together.
+    pub fn hint(&self) -> Hint {
+        Hint::new(&self.help_key, &self.help_desc)
     }
 }
 
@@ -37,6 +49,33 @@ pub struct KeyMap {
     pub toggle_theme: KeyBinding,
     pub toggle_hidden: KeyBinding,
     pub sort: KeyBinding,
+}
+
+impl KeyMap {
+    /// Hints for the file browser screen, in display order.
+    ///
+    /// Derived from the bindings, never written out: a hardcoded list is a second
+    /// copy of the truth, and this one drifted into advertising `u`/`x`/`y` — keys
+    /// bound to nothing — while telling users `d` downloads when `d` deletes.
+    ///
+    /// The bar is one row and drops overflow from the right, so the order is by
+    /// usefulness. `copy_tar` is deliberately absent: it only works on SSH
+    /// (`RemoteBackend::download_tar` defaults to an error), and advertising a
+    /// capability the active backend lacks is the very fault this method fixes.
+    pub fn browser_hints(&self) -> Vec<Hint> {
+        vec![
+            // Two bindings, one hint: `up`/`down` have no single label.
+            Hint::new("j/k", "navigate"),
+            self.switch_pane.hint(),
+            self.copy_file.hint(),
+            self.delete.hint(),
+            self.rename.hint(),
+            self.mkdir.hint(),
+            self.sort.hint(),
+            self.help.hint(),
+            self.quit.hint(),
+        ]
+    }
 }
 
 fn key(code: KeyCode) -> KeyEvent {
@@ -91,7 +130,9 @@ pub fn default_key_map() -> KeyMap {
         copy_file: KeyBinding {
             keys: vec![key(KeyCode::Char('c'))],
             help_key: "c".to_string(),
-            help_desc: "copy file".to_string(),
+            // Not "copy file": the one thing a user needs from this label is that
+            // it is how you download, and the status bar is one row wide.
+            help_desc: "upload/download".to_string(),
         },
         copy_tar: KeyBinding {
             keys: vec![key_shift(KeyCode::Char('C'))],
@@ -159,6 +200,75 @@ pub fn default_key_map() -> KeyMap {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The invariant the constructor does NOT give for free.
+    ///
+    /// Deriving the hints from the bindings makes "every advertised key is bound"
+    /// true by construction — testing that would just re-check the constructor.
+    /// This is the real gap: nothing stops someone binding `d` to download while
+    /// `delete` still answers `d`, which is a near miss from the bug that made the
+    /// status bar lie in the first place. First match wins in `handle_browser_key`,
+    /// so the loser would simply go dead.
+    #[test]
+    fn no_two_bindings_claim_the_same_key() {
+        let km = default_key_map();
+        let named: Vec<(&str, &KeyBinding)> = vec![
+            ("quit", &km.quit),
+            ("help", &km.help),
+            ("up", &km.up),
+            ("down", &km.down),
+            ("enter", &km.enter),
+            ("back", &km.back),
+            ("switch_pane", &km.switch_pane),
+            ("copy_file", &km.copy_file),
+            ("copy_tar", &km.copy_tar),
+            ("delete", &km.delete),
+            ("rename", &km.rename),
+            ("mkdir", &km.mkdir),
+            ("search", &km.search),
+            ("escape", &km.escape),
+            ("refresh", &km.refresh),
+            ("top", &km.top),
+            ("bottom", &km.bottom),
+            ("toggle_theme", &km.toggle_theme),
+            ("toggle_hidden", &km.toggle_hidden),
+            ("sort", &km.sort),
+        ];
+        assert_eq!(
+            named.len(),
+            20,
+            "a binding was added to KeyMap without being listed here"
+        );
+        for (i, (name, a)) in named.iter().enumerate() {
+            for (other, b) in &named[i + 1..] {
+                for k in &a.keys {
+                    assert!(!b.matches(k), "{name} and {other} both answer to {k:?}");
+                }
+            }
+        }
+    }
+
+    /// Every advertised hint must name a key some binding answers to. Vacuous for
+    /// the derived ones; it catches the literals (`j/k`) drifting off the keymap.
+    #[test]
+    fn every_browser_hint_is_reachable() {
+        let km = default_key_map();
+        for hint in km.browser_hints() {
+            let reachable = hint.key.chars().any(|c| {
+                let ev = key(KeyCode::Char(c));
+                km.up.matches(&ev)
+                    || km.down.matches(&ev)
+                    || km.copy_file.matches(&ev)
+                    || km.delete.matches(&ev)
+                    || km.rename.matches(&ev)
+                    || km.mkdir.matches(&ev)
+                    || km.sort.matches(&ev)
+                    || km.help.matches(&ev)
+                    || km.quit.matches(&ev)
+            }) || hint.key == "tab";
+            assert!(reachable, "hint {hint:?} is bound to nothing");
+        }
+    }
 
     #[test]
     fn quit_matches_q() {

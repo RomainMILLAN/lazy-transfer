@@ -485,6 +485,50 @@ impl DavClient {
         }
     }
 
+    /// The ONLY way to obtain a request builder in this file, and it comes back
+    /// already carrying `Authorization`.
+    ///
+    /// `http::Request::builder()` must not appear anywhere else. Reading the `auth`
+    /// field directly silently drops Digest — `auth` is `None` for it — and that is
+    /// exactly how `get_file` came to send bare GETs that every Digest server
+    /// refused, while upload and listing worked. A comment saying "always authorize
+    /// here" only assigns blame after the fact; a factory makes the omission
+    /// unexpressible.
+    fn builder(&self, method: &str, url: &str) -> Result<http::request::Builder, String> {
+        self.builder_with(method, url, None)
+    }
+
+    /// `precomputed` is for the one caller that already answered a fresh challenge
+    /// and must not have a second `Authorization` appended: `http`'s builder appends
+    /// headers, it does not replace them.
+    fn builder_with(
+        &self,
+        method: &str,
+        url: &str,
+        precomputed: Option<String>,
+    ) -> Result<http::request::Builder, String> {
+        let m = http::Method::from_bytes(method.as_bytes())
+            .map_err(|e| format!("méthode HTTP invalide '{method}': {e}"))?;
+        let mut builder = http::Request::builder().method(m).uri(url);
+        if let Some(a) = precomputed.or_else(|| self.auth_header_for(method, url)) {
+            builder = builder.header(http::header::AUTHORIZATION, a);
+        }
+        Ok(builder)
+    }
+
+    /// The 401 message, asked of the client instead of computed by the caller.
+    ///
+    /// Callers used to pass `digest_attempted: self.digest.is_some()`, which meant
+    /// rummaging through the client to tell it something it already knew.
+    fn unauthorized<T>(&self, method: &str, path: &str, res: &http::Response<T>) -> String {
+        unauthorized_error(
+            method,
+            path,
+            challenge_of(res).as_deref(),
+            self.digest.is_some(),
+        )
+    }
+
     fn send(
         &self,
         method: &str,
@@ -493,13 +537,7 @@ impl DavClient {
         body: Option<&'static str>,
         digest: Option<String>,
     ) -> Result<Sent, String> {
-        let m = http::Method::from_bytes(method.as_bytes())
-            .map_err(|e| format!("méthode HTTP invalide '{method}': {e}"))?;
-        let mut builder = http::Request::builder().method(m).uri(url);
-        let auth = digest.or_else(|| self.auth_header_for(method, url));
-        if let Some(a) = &auth {
-            builder = builder.header(http::header::AUTHORIZATION, a);
-        }
+        let mut builder = self.builder_with(method, url, digest)?;
         for (k, v) in headers {
             builder = builder.header(*k, v);
         }
@@ -685,17 +723,13 @@ impl WebDavBackend {
                        progress: &mut ByteProgress|
          -> Result<http::Response<ureq::Body>, String> {
             let mut reader = ProgressReader::new(std::io::BufReader::new(file), progress);
-            let mut builder = http::Request::builder()
-                .method(http::Method::PUT)
-                .uri(&url)
+            let builder = client
+                .builder("PUT", &url)?
                 // SendBody::from_reader would otherwise use Transfer-Encoding:
                 // chunked, which several WebDAV servers reject on PUT. ureq honours
                 // an explicit Content-Length.
                 .header(http::header::CONTENT_LENGTH, len.to_string())
                 .header(http::header::CONTENT_TYPE, "application/octet-stream");
-            if let Some(a) = client.auth_header_for("PUT", &url) {
-                builder = builder.header(http::header::AUTHORIZATION, a);
-            }
             let req = builder
                 .body(ureq::SendBody::from_reader(&mut reader))
                 .map_err(|e| format!("requête PUT invalide: {e}"))?;
@@ -721,12 +755,7 @@ impl WebDavBackend {
 
         match res.status().as_u16() {
             200 | 201 | 204 => Ok(()),
-            401 => Err(unauthorized_error(
-                "PUT",
-                logical,
-                challenge_of(&res).as_deref(),
-                client.digest.is_some(),
-            )),
+            401 => Err(client.unauthorized("PUT", logical, &res)),
             s => Err(dav_error("PUT", logical, s)),
         }
     }
@@ -741,18 +770,36 @@ impl WebDavBackend {
         set_total: bool,
     ) -> Result<(), String> {
         let url = client.url_for_file(logical)?;
-        let mut builder = http::Request::builder().method(http::Method::GET).uri(&url);
-        if let Some(a) = &client.auth {
-            builder = builder.header(http::header::AUTHORIZATION, a);
-        }
-        let req = builder
-            .body(())
-            .map_err(|e| format!("requête GET invalide: {e}"))?;
-        let mut res = client
-            .agent
-            .run(req)
-            .map_err(|e| format!("WebDAV GET '{logical}': {e}"))?;
+
+        // An empty body replays for free, unlike the PUT's: no `ByteProgress::rewind`
+        // is needed because the status is checked before the local file is created
+        // below, so a refused attempt has written and counted nothing.
+        let attempt = || -> Result<http::Response<ureq::Body>, String> {
+            let req = client
+                .builder("GET", &url)?
+                .body(())
+                .map_err(|e| format!("requête GET invalide: {e}"))?;
+            client
+                .agent
+                .run(req)
+                .map_err(|e| format!("WebDAV GET '{logical}': {e}"))
+        };
+
+        let res = attempt()?;
+        // Only a Digest client can answer a challenge; re-sending an identical Basic
+        // header would waste a round trip and mislabel the failure.
+        let mut res = if res.status().as_u16() == 401
+            && client.learn_challenge(challenge_of(&res).as_deref())
+        {
+            attempt()?
+        } else {
+            res
+        };
+
         let status = res.status().as_u16();
+        if status == 401 {
+            return Err(client.unauthorized("GET", logical, &res));
+        }
         if status != 200 {
             return Err(dav_error("GET", logical, status));
         }

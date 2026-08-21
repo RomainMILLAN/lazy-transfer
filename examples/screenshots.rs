@@ -23,7 +23,8 @@ use lazy_transfer::transfer::types::{
 };
 use lazy_transfer::ui::brand;
 use lazy_transfer::ui::components::connectionbar;
-use lazy_transfer::ui::components::statusbar::{browser_hints, connection_hints, StatusBar};
+use lazy_transfer::ui::components::statusbar::{connection_hints, StatusBar};
+use lazy_transfer::ui::keys::default_key_map;
 use lazy_transfer::ui::layout::{compute_connection_screen, compute_layout};
 use lazy_transfer::ui::panels::connection::ConnectionPanel;
 use lazy_transfer::ui::panels::local_files::LocalFilesPanel;
@@ -189,7 +190,7 @@ fn browser_screen(width: u16, height: u16) -> Buffer {
     transfers.render(Rect::new(0, y, width, l.transfer_h), &mut buf);
 
     let mut bar = StatusBar::new();
-    bar.set_hints(browser_hints());
+    bar.set_hints(default_key_map().browser_hints());
     bar.render(Rect::new(0, height - 1, width, 1), &mut buf);
     buf
 }
