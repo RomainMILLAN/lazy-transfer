@@ -318,6 +318,12 @@ impl RemoteBackend for SshRunner {
         Ok(StreamHandle { rx, child_pid })
     }
 
+    /// SSH is the one backend with server-side shell execution, so it is the one
+    /// backend that can tar remotely. Kept next to the two impls it vouches for.
+    fn supports_tar(&self) -> bool {
+        true
+    }
+
     fn upload_tar(&self, local_path: &str, remote_dest: &str) -> Result<StreamHandle, String> {
         self.upload_dir(local_path, remote_dest)
     }

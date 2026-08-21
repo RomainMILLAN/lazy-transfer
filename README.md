@@ -225,10 +225,25 @@ On subsequent launches, saved connections are available for quick access. Press 
 
 ## Keybindings
 
-These tables are the ones in `src/ui/keys.rs`. They used to advertise `u`/`x`/`y`/`N`/`t`
-and `d` for "download" — keys bound to nothing, and `d` in fact **deletes**. If you change
-a binding, change `default_key_map()`: the status bar now derives its hints from it, so it
-cannot drift again, but this file still has to be kept honest by hand.
+These tables mirror `src/ui/keys.rs`. The in-app hints and the `?` popup are built
+from the bindings themselves, so they cannot drift — but **this file is kept honest
+by hand**: if you change a binding, change it here too. It used to advertise
+`u`/`x`/`y`/`N`/`t` and `d` for "download", all bound to nothing except `d`, which
+in fact **deletes**.
+
+### Connection screen
+
+| Key | Action |
+|-----|--------|
+| `1` `2` `3` `4` | Switch protocol tab (SSH / SFTP / FTP / WebDAV) |
+| `j` / `k` or `Down` / `Up` | Navigate down / up |
+| `Enter` | Connect to the selected entry |
+| `e` | Edit the selected saved connection |
+| `x` | Delete the selected saved connection |
+| `/` | Filter saved connections |
+| `Esc` | Clear the filter |
+| `?` | Show help |
+| `q` | Quit |
 
 ### File browser
 
@@ -255,20 +270,29 @@ The active pane decides the direction: there is **one** transfer key, not one pe
 | Key | Action |
 |-----|--------|
 | `c` | Transfer selected item — upload from the local pane, **download** from the remote one |
-| `C` | Same via tar (SSH only; compresses, so it is faster on many small files) |
+| `C` | Same via tar, on backends with server-side shell execution (SSH); compresses, so it is faster on many small files |
 | `d` | Delete selected item |
 | `r` | Rename selected item |
 | `m` | Create directory |
 
-### Connection screen
+Transfers appear in a panel at the bottom that grows while transfers run. It reports
+progress and results; it is not focusable and has no keys of its own.
+
+### Dialogs
 
 | Key | Action |
 |-----|--------|
-| `1` `2` `3` `4` | Switch protocol tab (SSH / SFTP / FTP / WebDAV) |
-| `Enter` | Connect |
-| `e` | Edit the selected saved connection |
-| `x` | Delete the selected saved connection |
-| `/` | Filter saved connections |
+| `y` / `Enter` | Confirm |
+| `n` / `Esc` | Cancel |
+| letter shown in `[…]` | Pick that option (sort column, auth method) |
+| `Enter` / `Esc` | Submit / cancel a text field |
+
+### Mouse
+
+| Action | Effect |
+|--------|--------|
+| Click | Focus a panel (file browser only) |
+| Scroll | Navigate up / down in the active list |
 
 ## Development
 

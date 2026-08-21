@@ -23,7 +23,7 @@ use lazy_transfer::transfer::types::{
 };
 use lazy_transfer::ui::brand;
 use lazy_transfer::ui::components::connectionbar;
-use lazy_transfer::ui::components::statusbar::{connection_hints, StatusBar};
+use lazy_transfer::ui::components::statusbar::{browser_hints, connection_hints, StatusBar};
 use lazy_transfer::ui::keys::default_key_map;
 use lazy_transfer::ui::layout::{compute_connection_screen, compute_layout};
 use lazy_transfer::ui::panels::connection::ConnectionPanel;
@@ -31,6 +31,7 @@ use lazy_transfer::ui::panels::local_files::LocalFilesPanel;
 use lazy_transfer::ui::panels::remote_files::RemoteFilesPanel;
 use lazy_transfer::ui::panels::transfers::TransfersPanel;
 use lazy_transfer::ui::style::theme::{self, ThemeMode};
+use lazy_transfer::ui::ActivePane;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier};
@@ -107,9 +108,12 @@ fn connection_screen(width: u16, height: u16) -> Buffer {
     ];
     ConnectionPanel::new(hosts, Vec::new()).render(l.panel, &mut buf, false, false);
 
-    let mut bar = StatusBar::new();
-    bar.set_hints(connection_hints());
-    bar.render(Rect::new(0, height - 1, width, 1), &mut buf);
+    let bar = StatusBar::new();
+    bar.render(
+        Rect::new(0, height - 1, width, 1),
+        &mut buf,
+        &connection_hints(),
+    );
     buf
 }
 
@@ -189,9 +193,11 @@ fn browser_screen(width: u16, height: u16) -> Buffer {
 
     transfers.render(Rect::new(0, y, width, l.transfer_h), &mut buf);
 
-    let mut bar = StatusBar::new();
-    bar.set_hints(default_key_map().browser_hints());
-    bar.render(Rect::new(0, height - 1, width, 1), &mut buf);
+    let bar = StatusBar::new();
+    // The artwork shows an SSH session on the local pane, so: tar available,
+    // `c` reading "upload".
+    let hints = browser_hints(&default_key_map(), ActivePane::Local, true);
+    bar.render(Rect::new(0, height - 1, width, 1), &mut buf, &hints);
     buf
 }
 
