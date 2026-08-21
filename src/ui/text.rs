@@ -29,9 +29,7 @@ pub fn wrap_field<'a>(
         let chunk_end = if remaining.len() <= available {
             remaining.len()
         } else {
-            remaining[..available]
-                .rfind(' ')
-                .map_or(available, |pos| pos)
+            remaining[..available].rfind(' ').unwrap_or(available)
         };
 
         let chunk = &remaining[..chunk_end];
