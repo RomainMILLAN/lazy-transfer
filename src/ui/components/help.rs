@@ -6,6 +6,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Clear, Widget};
 
 use super::hint::Hint;
+use crate::ui::keys::{default_key_map, merged, KeyMap};
 use crate::ui::style::{styles, theme};
 
 /// HelpSection groups related keybindings.
@@ -102,7 +103,7 @@ impl HelpPopup {
         lines.push(Line::from(Span::styled("Keyboard Shortcuts", title_style)));
         lines.push(Line::raw(""));
 
-        let sections = help_sections();
+        let sections = help_sections(&default_key_map());
         for (i, section) in sections.iter().enumerate() {
             if i > 0 {
                 lines.push(Line::raw(""));
@@ -154,7 +155,7 @@ impl HelpPopup {
             return String::new();
         }
 
-        let sections = help_sections();
+        let sections = help_sections(&default_key_map());
         let mut b = String::new();
 
         b.push_str("Keyboard Shortcuts\n\n");
@@ -175,102 +176,68 @@ impl HelpPopup {
     }
 }
 
-fn help_sections() -> Vec<HelpSection> {
+/// The popup's contents, built from the bindings.
+///
+/// Nothing here writes a key out. The popup happened to be CORRECT while the
+/// status bar lied, but for the same reason the bar was wrong: someone copied by
+/// hand and got lucky. A second copy of the truth is a bug waiting for its turn.
+fn help_sections(km: &KeyMap) -> Vec<HelpSection> {
     vec![
+        HelpSection {
+            title: "Connection screen".to_string(),
+            bindings: vec![
+                // `1`-`4`, `e` and `x` are matched directly in
+                // `handle_connection_key`, not through the keymap, so they are the
+                // one place a literal is still correct — see `connection_hints`.
+                Hint::new("1-4", "protocol tab (SSH/SFTP/FTP/WebDAV)"),
+                km.enter.hint_as("connect to the selected entry"),
+                Hint::new("e", "edit a saved connection"),
+                Hint::new("x", "remove a saved connection"),
+                km.search.hint_as("filter the list"),
+            ],
+        },
         HelpSection {
             title: "Navigation".to_string(),
             bindings: vec![
-                Hint {
-                    key: "j/k / arrows".to_string(),
-                    desc: "navigate up/down".to_string(),
-                },
-                Hint {
-                    key: "tab".to_string(),
-                    desc: "switch pane (local/remote)".to_string(),
-                },
-                Hint {
-                    key: "enter".to_string(),
-                    desc: "open directory".to_string(),
-                },
-                Hint {
-                    key: "backspace/h".to_string(),
-                    desc: "parent directory".to_string(),
-                },
-                Hint {
-                    key: "g / G".to_string(),
-                    desc: "go to top / bottom".to_string(),
-                },
-                Hint {
-                    key: "/".to_string(),
-                    desc: "search / filter".to_string(),
-                },
-                Hint {
-                    key: ".".to_string(),
-                    desc: "toggle hidden files".to_string(),
-                },
-                Hint {
-                    key: "s".to_string(),
-                    desc: "sort (name/size/date)".to_string(),
-                },
+                merged(&km.up, &km.down, "j/k/arrows", "navigate up/down"),
+                km.switch_pane.hint_as("switch pane (local/remote)"),
+                km.enter.hint_as("open directory"),
+                km.back.hint_as("parent directory"),
+                merged(&km.top, &km.bottom, "g/G", "go to top / bottom"),
+                km.search.hint_as("search / filter"),
+                km.escape.hint_as("clear the filter / cancel a dialog"),
+                km.toggle_hidden.hint_as("toggle hidden files"),
+                km.sort.hint_as("sort (name/size/date)"),
             ],
         },
         HelpSection {
             title: "File Operations".to_string(),
             bindings: vec![
-                Hint {
-                    key: "c".to_string(),
-                    desc: "copy file (upload or download)".to_string(),
-                },
-                Hint {
-                    key: "C".to_string(),
-                    desc: "copy file via tar (SSH only, compresses)".to_string(),
-                },
-                Hint {
-                    key: "d".to_string(),
-                    desc: "delete file/directory".to_string(),
-                },
-                Hint {
-                    key: "r".to_string(),
-                    desc: "rename file/directory".to_string(),
-                },
-                Hint {
-                    key: "m".to_string(),
-                    desc: "create directory (mkdir)".to_string(),
-                },
+                // One key, both directions: the focused pane decides which way it
+                // goes, exactly as `start_copy` does.
+                km.copy_file
+                    .hint_as("copy — upload from the local pane, download from the remote one"),
+                km.copy_tar
+                    .hint_as("copy via tar (backends with shell execution only)"),
+                km.delete.hint_as("delete file/directory"),
+                km.rename.hint_as("rename file/directory"),
+                km.mkdir.hint_as("create directory"),
             ],
         },
         HelpSection {
             title: "General".to_string(),
             bindings: vec![
-                Hint {
-                    key: "R".to_string(),
-                    desc: "refresh current panel".to_string(),
-                },
-                Hint {
-                    key: "Ctrl+L".to_string(),
-                    desc: "toggle light/dark theme".to_string(),
-                },
-                Hint {
-                    key: "?".to_string(),
-                    desc: "show this help".to_string(),
-                },
-                Hint {
-                    key: "q".to_string(),
-                    desc: "quit".to_string(),
-                },
+                km.refresh.hint_as("refresh current panel"),
+                km.toggle_theme.hint_as("toggle light/dark theme"),
+                km.help.hint_as("show this help"),
+                km.quit.hint_as("quit"),
             ],
         },
         HelpSection {
             title: "Mouse".to_string(),
             bindings: vec![
-                Hint {
-                    key: "click".to_string(),
-                    desc: "focus panel".to_string(),
-                },
-                Hint {
-                    key: "scroll".to_string(),
-                    desc: "navigate up/down in lists".to_string(),
-                },
+                Hint::new("click", "focus a panel (file browser only)"),
+                Hint::new("scroll", "navigate up/down in lists"),
             ],
         },
     ]
@@ -316,6 +283,56 @@ mod tests {
 
     #[test]
     fn help_sections_count() {
-        assert_eq!(help_sections().len(), 4);
+        assert_eq!(help_sections(&default_key_map()).len(), 5);
+    }
+
+    /// Same invariant as the status bar: nothing in the popup may name a key that
+    /// is bound to nothing.
+    ///
+    /// The exemptions are named, never a wildcard. `click`/`scroll` are not keys;
+    /// `1-4`, `e` and `x` are matched directly in `handle_connection_key` rather
+    /// than through the keymap, so this test cannot reach them — which is the whole
+    /// reason `connection_hints_are_all_handled` exists in `app`.
+    #[test]
+    fn every_help_key_is_bound() {
+        let km = default_key_map();
+        const NOT_KEYS: [&str; 5] = ["click", "scroll", "1-4", "e", "x"];
+        for section in help_sections(&km) {
+            for binding in section.bindings {
+                if NOT_KEYS.contains(&binding.key.as_str()) {
+                    continue;
+                }
+                assert!(
+                    km.names_only_bound_keys(&binding.key),
+                    "help advertises {:?} ({}) but nothing answers to it",
+                    binding.key,
+                    section.title
+                );
+            }
+        }
+    }
+
+    /// The vim key for "parent directory" must stay visible. It is documented
+    /// nowhere else, and the label it is derived from used to omit it.
+    #[test]
+    fn parent_directory_still_shows_the_vim_key() {
+        let km = default_key_map();
+        let nav = help_sections(&km)
+            .into_iter()
+            .find(|s| s.title == "Navigation")
+            .expect("no Navigation section");
+        let back = nav
+            .bindings
+            .iter()
+            .find(|b| b.desc == "parent directory")
+            .expect("no parent directory row");
+        assert!(back.key.contains('h'), "h vanished from {:?}", back.key);
+    }
+
+    /// The connection screen has its own keys and the popup used to omit them.
+    #[test]
+    fn connection_screen_is_documented() {
+        let sections = help_sections(&default_key_map());
+        assert!(sections.iter().any(|s| s.title == "Connection screen"));
     }
 }

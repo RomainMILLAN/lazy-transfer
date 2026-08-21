@@ -17,6 +17,17 @@ pub trait RemoteBackend: Send + Sync {
     fn upload_dir(&self, local_path: &str, remote_dest: &str) -> Result<StreamHandle, String>;
     /// Download a directory: tar remotely, scp the archive, extract locally, cleanup.
     fn download_dir(&self, remote_path: &str, local_dest: &str) -> Result<StreamHandle, String>;
+    /// Whether this backend can stream a single file through tar.
+    ///
+    /// Default false — only backends with server-side shell execution override it.
+    /// MUST agree with `upload_tar`/`download_tar` below: answering true while
+    /// leaving those at their default (which errors) advertises a key that cannot
+    /// work, which is how the status bar came to promise things it could not do.
+    /// `supports_tar_matches_the_tar_impls` in this file enforces the agreement.
+    fn supports_tar(&self) -> bool {
+        false
+    }
+
     /// Upload a single file via tar: tar locally, scp archive, extract remotely, cleanup.
     /// Default impl returns an error for backends without server-side shell execution.
     fn upload_tar(&self, _local_path: &str, _remote_dest: &str) -> Result<StreamHandle, String> {

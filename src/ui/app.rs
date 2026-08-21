@@ -24,16 +24,17 @@ use crate::transfer::ssh_config::parse_ssh_config;
 use crate::transfer::types::*;
 use crate::ui::brand;
 use crate::ui::components::*;
-use crate::ui::keys::default_key_map;
+use crate::ui::keys::{default_key_map, KeyMap};
 use crate::ui::layout::{
     compute_connection_layout, compute_connection_screen, compute_layout, Layout,
 };
 use crate::ui::messages::Action;
 use crate::ui::style::{styles, theme};
 use crate::ui::webdav_form::{WebDavForm, WebDavStep};
+use crate::ui::ActivePane;
 
 use super::components::connectionbar;
-use super::components::statusbar::connection_hints;
+use super::components::statusbar::{browser_hints, connection_hints};
 
 // --- Background messages ---
 
@@ -69,16 +70,10 @@ enum BgMsg {
 
 // --- App screens ---
 
-#[derive(PartialEq)]
+#[derive(Debug, PartialEq)]
 enum AppScreen {
     ConnectionSelect,
     FileBrowser,
-}
-
-#[derive(PartialEq, Clone, Copy)]
-enum ActivePane {
-    Local,
-    Remote,
 }
 
 const WEBDAV_URL_HINT: &str = "https://host/remote.php/dav/files/user/";
@@ -156,6 +151,10 @@ pub struct App {
     spinner: LoadingSpinner,
     status_bar: StatusBar,
 
+    // The keymap is THE reference for what a key does and how it is advertised,
+    // so it is owned once rather than rebuilt on every keystroke and every frame.
+    key_map: KeyMap,
+
     // State
     active_pane: ActivePane,
     input_mode: InputMode,
@@ -229,6 +228,7 @@ impl App {
             input: InputBox::new(),
             spinner: LoadingSpinner::new(),
             status_bar: StatusBar::new(),
+            key_map: default_key_map(),
             active_pane: ActivePane::Local,
             input_mode: InputMode::None,
             filtering: false,
@@ -269,7 +269,6 @@ impl App {
         // Initial layout
         let (w, h) = crossterm::terminal::size()?;
         self.layout = compute_connection_layout(w, h);
-        self.status_bar.set_hints(connection_hints());
 
         // If CLI host was provided, connect directly
         if self.cli_host.is_some() {
@@ -366,7 +365,8 @@ impl App {
 
         // Status bar
         let status_area = Rect::new(0, area.height.saturating_sub(1), area.width, 1);
-        self.status_bar.render(status_area, buf);
+        self.status_bar
+            .render(status_area, buf, &connection_hints());
     }
 
     fn render_file_browser(&mut self, area: Rect, buf: &mut Buffer) {
@@ -411,7 +411,12 @@ impl App {
         // Status bar
         if l.status_bar_h > 0 && y < area.height {
             let status_area = Rect::new(0, y, area.width, 1);
-            self.status_bar.render(status_area, buf);
+            // Built here, never stored: the direction follows the focused pane and
+            // the tar hint follows the backend, so both are read at the moment
+            // they are drawn. A remembered copy is what advertised `d download`.
+            let supports_tar = self.runner.as_ref().is_some_and(|r| r.supports_tar());
+            let hints = browser_hints(&self.key_map, self.active_pane, supports_tar);
+            self.status_bar.render(status_area, buf, &hints);
         }
     }
 
@@ -453,8 +458,16 @@ impl App {
             let msg = crate::ui::text::truncate_ellipsis(self.confirm.message(), max);
             buf.set_stringn(inner.x + 1, inner.y, &msg, max, style);
 
-            let hint = "[y]es / [n]o";
-            buf.set_string(inner.x + 1, inner.y + 2, hint, styles::muted_style());
+            // The dialog decides which keys it accepts, so it is the only thing
+            // entitled to announce them. This used to be a second copy of a string
+            // that also lived in `ConfirmDialog::view`, and both omitted the
+            // `enter`/`esc` the dialog has always accepted.
+            buf.set_string(
+                inner.x + 1,
+                inner.y + 2,
+                self.confirm.hint(),
+                styles::muted_style(),
+            );
         }
 
         // Choice dialog
@@ -513,7 +526,7 @@ impl App {
     // --- Key handling ---
 
     fn handle_key(&mut self, key: KeyEvent) -> bool {
-        let km = default_key_map();
+        let km = &self.key_map;
 
         // 1. Modal dialogs (highest priority)
         if self.confirm.is_visible() {
@@ -673,7 +686,7 @@ impl App {
     }
 
     fn handle_connection_key(&mut self, key: KeyEvent) {
-        let km = default_key_map();
+        let km = &self.key_map;
 
         // Tab switching: 1=SSH, 2=SFTP, 3=FTP, 4=WebDAV
         if let crossterm::event::KeyCode::Char('1') = key.code {
@@ -777,7 +790,7 @@ impl App {
     }
 
     fn handle_browser_key(&mut self, key: KeyEvent) {
-        let km = default_key_map();
+        let km = &self.key_map;
 
         if km.switch_pane.matches(&key) {
             self.active_pane = match self.active_pane {
@@ -896,13 +909,23 @@ impl App {
 
     fn handle_mouse(&mut self, mouse: crossterm::event::MouseEvent) {
         match mouse.kind {
-            MouseEventKind::ScrollUp => match self.active_pane {
-                ActivePane::Local => self.local_files.move_up(),
-                ActivePane::Remote => self.remote_files.move_up(),
+            // Routed by screen, the same way `handle_key` dispatches. Without the
+            // screen check the wheel moved the cursor of the local/remote panels
+            // while they were not even on screen, and left the connection list —
+            // the only visible list — untouched.
+            MouseEventKind::ScrollUp => match self.screen {
+                AppScreen::ConnectionSelect => self.connection_panel.move_up(),
+                AppScreen::FileBrowser => match self.active_pane {
+                    ActivePane::Local => self.local_files.move_up(),
+                    ActivePane::Remote => self.remote_files.move_up(),
+                },
             },
-            MouseEventKind::ScrollDown => match self.active_pane {
-                ActivePane::Local => self.local_files.move_down(),
-                ActivePane::Remote => self.remote_files.move_down(),
+            MouseEventKind::ScrollDown => match self.screen {
+                AppScreen::ConnectionSelect => self.connection_panel.move_down(),
+                AppScreen::FileBrowser => match self.active_pane {
+                    ActivePane::Local => self.local_files.move_down(),
+                    ActivePane::Remote => self.remote_files.move_down(),
+                },
             },
             MouseEventKind::Down(MouseButton::Left) if self.screen == AppScreen::FileBrowser => {
                 if mouse.column < self.layout.left_width {
@@ -1653,7 +1676,6 @@ impl App {
 
                     let (w, h) = crossterm::terminal::size().unwrap_or((120, 40));
                     self.layout = compute_layout(w, h, false);
-                    self.status_bar.set_hints(default_key_map().browser_hints());
 
                     self.remote_files.set_dir(&home_dir);
                     self.spawn_load_remote(&home_dir);
@@ -1666,7 +1688,6 @@ impl App {
 
                     let (w, h) = crossterm::terminal::size().unwrap_or((120, 40));
                     self.layout = compute_layout(w, h, false);
-                    self.status_bar.set_hints(default_key_map().browser_hints());
 
                     self.remote_files.set_dir(&home_dir);
                     self.spawn_load_remote(&home_dir);
@@ -1846,6 +1867,16 @@ impl App {
     }
 
     fn start_copy_tar(&mut self) {
+        // Asked of the backend, never derived from the protocol: the UI does not
+        // know which protocol is active. Without this the key was still pressable
+        // everywhere and `upload_tar` fell through to the default impl, so the user
+        // got a transfer that died instead of a refusal that explains itself.
+        if !self.runner.as_ref().is_some_and(|r| r.supports_tar()) {
+            self.info_msg =
+                Some("tar mode needs a backend with shell execution — use c instead.".to_string());
+            return;
+        }
+
         match self.active_pane {
             ActivePane::Local => {
                 let entry = match self.local_files.selected() {
@@ -2428,5 +2459,102 @@ impl App {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ui::components::statusbar::connection_hints;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    fn app() -> App {
+        let config = Config {
+            ssh_bin: "ssh".to_string(),
+            scp_bin: "scp".to_string(),
+            start_dir: ".".to_string(),
+        };
+        App::new(config, None, None, 22, None, Protocol::Ssh)
+    }
+
+    fn press(app: &mut App, c: char) {
+        app.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+    }
+
+    /// The connection screen advertises `1`-`4`, `e` and `x`, which are matched as
+    /// literals in `handle_connection_key` rather than through the `KeyMap`. That
+    /// is a deliberate choice — a `KeyBinding` nothing matches would be exactly the
+    /// unread field this whole change removed — but it means the keymap tests
+    /// cannot see them. This is the test that pays for the choice: if a literal is
+    /// dropped from the match, the bar would go on advertising it forever.
+    #[test]
+    fn connection_hints_are_all_handled() {
+        let mut a = app();
+        assert_eq!(a.screen, AppScreen::ConnectionSelect);
+
+        // `1`-`4` select a protocol tab.
+        for (c, expected) in [
+            ('2', Protocol::Sftp),
+            ('3', Protocol::Ftp),
+            ('4', Protocol::WebDav),
+            ('1', Protocol::Ssh),
+        ] {
+            press(&mut a, c);
+            assert_eq!(
+                a.connection_panel.selected_protocol, expected,
+                "{c} did not select {expected:?}"
+            );
+        }
+
+        // `/` starts the inline filter.
+        press(&mut a, '/');
+        assert!(a.filtering, "/ did not start filtering");
+        a.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(!a.filtering, "esc did not leave the filter");
+    }
+
+    /// Every key the connection bar names must be one this screen reacts to. The
+    /// literals above are checked by behaviour; `?` and `q` are globals.
+    #[test]
+    fn connection_hints_name_no_unknown_key() {
+        const KNOWN: [&str; 8] = ["1-4", "j/k", "enter", "e", "x", "/", "?", "q"];
+        for hint in connection_hints() {
+            assert!(
+                KNOWN.contains(&hint.key.as_str()),
+                "unreviewed key {:?} in the connection bar",
+                hint.key
+            );
+        }
+    }
+
+    /// `e` and `x` act only on a saved entry, so they cannot be exercised without
+    /// fixtures — but they must at least still be matched. A missing arm here is
+    /// what would make the bar lie again.
+    #[test]
+    fn edit_and_remove_are_still_matched() {
+        let src = include_str!("app.rs");
+        assert!(
+            src.contains("KeyCode::Char('e')"),
+            "the `e` (edit saved connection) arm is gone but the bar advertises it"
+        );
+        assert!(
+            src.contains("KeyCode::Char('x')"),
+            "the `x` (remove saved connection) arm is gone but the bar advertises it"
+        );
+    }
+
+    /// `d` deletes. The bar once said it downloads, and following that advice
+    /// opened the delete confirmation on the selected file.
+    #[test]
+    fn d_is_the_delete_binding() {
+        let a = app();
+        assert!(a
+            .key_map
+            .delete
+            .matches(&KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE)));
+        assert!(a
+            .key_map
+            .copy_file
+            .matches(&KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE)));
     }
 }

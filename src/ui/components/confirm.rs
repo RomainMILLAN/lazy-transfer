@@ -62,11 +62,20 @@ impl ConfirmDialog {
         }
     }
 
+    /// The keys this dialog accepts, as advertised to the user.
+    ///
+    /// `handle_key` takes `y`/`Y`/`enter` for yes and `n`/`N`/`esc` for no, and the
+    /// old label mentioned neither `enter` nor `esc`. Same rule as the keymap: what
+    /// decides the keys is what announces them.
+    pub fn hint(&self) -> &'static str {
+        "[y]es / [n]o  ·  enter = yes, esc = no"
+    }
+
     pub fn view(&self) -> String {
         if !self.visible {
             return String::new();
         }
-        format!("{}\n\n[y]es / [n]o", self.message)
+        format!("{}\n\n{}", self.message, self.hint())
     }
 }
 
